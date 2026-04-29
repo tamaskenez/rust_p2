@@ -8,6 +8,12 @@ use kiss3d::prelude::*;
 
 use brep::{make_cube, Edge, FaceId, Mesh, OrientedEdge};
 
+#[derive(PartialEq, Eq)]
+enum Tool {
+    Rotate,
+    PushPull,
+}
+
 const OBJECT_Z: f32 = -3.0;
 const DRAG_THRESHOLD: f64 = 5.0;
 const FOV_Y: f32 = PI / 4.0;
@@ -191,6 +197,7 @@ async fn main() {
     let mut centroid = Vec3::ZERO;
     let mut rotation = Quat::IDENTITY;
     let mut selected_face: Option<FaceId> = None;
+    let mut active_tool = Tool::Rotate;
     let mut last_cursor: Option<(f64, f64)> = None;
     let mut cursor_pos = (0.0f64, 0.0f64);
     let mut press_pos: Option<(f64, f64)> = None;
@@ -262,6 +269,13 @@ async fn main() {
         }
 
         window.draw_ui(|ctx| {
+            egui::Window::new("Toolbar").show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    ui.selectable_value(&mut active_tool, Tool::Rotate, "rotate");
+                    ui.selectable_value(&mut active_tool, Tool::PushPull, "push/pull");
+                });
+            });
+
             egui::Window::new("Primitives").show(ctx, |ui| {
                 if ui.button("cube").clicked() {
                     if let Some(mut n) = current_main.take() {
