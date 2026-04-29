@@ -8,8 +8,9 @@ use nalgebra::Point3;
 use nalgebra::Unit;
 use nalgebra::Vector3;
 
-pub const EPS_LENGTH: f64 = 1e-6;
-pub const EPS_ANGLE: f64 = 1e-6;
+// Tolerances from Parasolid.
+pub const EPS_LENGTH: f64 = 0.01;
+pub const EPS_ANGLE: f64 = 0.05 * (std::f64::consts::PI / 180.0);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct VertexId(pub u32);
@@ -217,12 +218,8 @@ pub fn validate_mesh(mesh: &Mesh) -> Vec<String> {
             });
             if geometry_ok {
                 let computed = compute_face_normal(mesh, FaceId(i as u32));
-                let angle = computed
-                    .as_ref()
-                    .dot(stored.as_ref())
-                    .clamp(-1.0, 1.0)
-                    .acos();
-                if angle >= EPS_ANGLE {
+                let cos_angle = computed.as_ref().dot(stored.as_ref()).clamp(-1.0, 1.0);
+                if cos_angle < EPS_ANGLE.cos() {
                     errors.push(format!(
                         "face {i}: stored normal {:?} does not match computed normal {:?}",
                         stored.as_ref(),
