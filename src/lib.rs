@@ -23,28 +23,33 @@ pub struct OrientedEdgeId(pub u32);
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct FaceId(pub u32);
 
+#[derive(Clone)]
 pub struct Vertex {
     pub position: Point3<f64>,
 }
 
 /// Canonical direction is vertices[0] → vertices[1].
 /// oriented_edges[0] is the forward wrapper, oriented_edges[1] is the reversed wrapper.
+#[derive(Clone)]
 pub struct Edge {
     pub vertices: [VertexId; 2],
     pub oriented_edges: [OrientedEdgeId; 2],
 }
 
+#[derive(Clone)]
 pub struct OrientedEdge {
     pub edge: EdgeId,
     pub forward: bool,
     pub face: FaceId,
 }
 
+#[derive(Clone)]
 pub struct Face {
     pub oriented_edges: Vec<OrientedEdgeId>,
     pub normal: Option<Unit<Vector3<f64>>>,
 }
 
+#[derive(Clone)]
 pub struct Mesh {
     pub vertices: Vec<Vertex>,
     pub edges: Vec<Edge>,

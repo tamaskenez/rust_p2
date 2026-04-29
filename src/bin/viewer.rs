@@ -14,6 +14,13 @@ enum Tool {
     PushPull,
 }
 
+struct PushPullOp {
+    mesh_before: Mesh,
+    offset: f64,
+    error: Option<String>,
+    scale: f64,
+}
+
 const OBJECT_Z: f32 = -3.0;
 const DRAG_THRESHOLD: f64 = 5.0;
 const FOV_Y: f32 = PI / 4.0;
@@ -42,6 +49,49 @@ fn compute_centroid(mesh: &Mesh) -> Vec3 {
         }
     }
     if count > 0 { sum / count as f32 } else { Vec3::ZERO }
+}
+
+fn face_center_world(mesh: &Mesh, face_idx: usize, centroid: Vec3, rotation: Quat) -> Vec3 {
+    let verts = face_gpu_verts(mesh, face_idx);
+    let raw_center = verts.iter().copied().fold(Vec3::ZERO, |a, v| a + v) / verts.len() as f32;
+    rotation * (raw_center - centroid) + Vec3::new(0.0, 0.0, OBJECT_Z)
+}
+
+// Returns the world-space distance that corresponds to 1 screen pixel at the depth of
+// `center_world`. Computed by projecting center, shifting 1 pixel right on screen,
+// un-projecting back onto the plane z = center_world.z, and measuring the gap.
+fn pixels_to_world(center_world: Vec3, win_w: f32, win_h: f32) -> f32 {
+    let tan_hfov = (FOV_Y / 2.0).tan();
+    let aspect = win_w / win_h;
+    let depth = -center_world.z;
+    if depth < 1e-7 {
+        return 1.0;
+    }
+
+    // Project center to screen (pixels)
+    let ndcx_c = center_world.x / depth / (aspect * tan_hfov);
+    let ndcy_c = center_world.y / depth / tan_hfov;
+    let center_on_screen = Vec2::new(
+        (ndcx_c + 1.0) / 2.0 * win_w,
+        (1.0 - ndcy_c) / 2.0 * win_h,
+    );
+
+    // Shift 1 pixel to the right
+    let next_to_center_on_screen = center_on_screen + Vec2::X;
+
+    // Un-project next_to_center_on_screen to a world-space ray
+    let ndcx_n = 2.0 * next_to_center_on_screen.x / win_w - 1.0;
+    let ndcy_n = 1.0 - 2.0 * next_to_center_on_screen.y / win_h;
+    let rd = Vec3::new(ndcx_n * aspect * tan_hfov, ndcy_n * tan_hfov, -1.0).normalize();
+
+    // Intersect the ray with the plane z = center_world.z (normal = view axis)
+    // Ray: P(t) = eye + t*rd = t*rd (eye at origin); plane: P.z = center_world.z
+    let t = center_world.z / rd.z;
+    let next_to_center = rd * t;
+
+    // world distance / screen distance (= 1 pixel by construction)
+    (center_world - next_to_center).length()
+        / (center_on_screen - next_to_center_on_screen).length()
 }
 
 fn build_gpu_mesh(mesh: &Mesh, centroid: Vec3, face_mask: impl Fn(usize) -> bool) -> GpuMesh3d {
@@ -198,6 +248,7 @@ async fn main() {
     let mut rotation = Quat::IDENTITY;
     let mut selected_face: Option<FaceId> = None;
     let mut active_tool = Tool::Rotate;
+    let mut current_op: Option<PushPullOp> = None;
     let mut last_cursor: Option<(f64, f64)> = None;
     let mut cursor_pos = (0.0f64, 0.0f64);
     let mut press_pos: Option<(f64, f64)> = None;
@@ -213,21 +264,31 @@ async fn main() {
                 WindowEvent::CursorPos(x, y, _) => {
                     cursor_pos = (x, y);
                     if lmb && !ui_wants {
-                        if let Some((lx, ly)) = last_cursor {
-                            let dx = (x - lx) as f32 * 0.01;
-                            let dy = (y - ly) as f32 * 0.01;
-                            let qy = Quat::from_axis_angle(Vec3::Y, dx);
-                            let qx = Quat::from_axis_angle(Vec3::X, dy);
-                            for opt in [&mut current_main, &mut current_sel] {
-                                if let Some(node) = opt {
-                                    node.rotate(qy);
-                                    node.rotate(qx);
+                        match active_tool {
+                            Tool::Rotate => {
+                                if let Some((lx, ly)) = last_cursor {
+                                    let dx = (x - lx) as f32 * 0.01;
+                                    let dy = (y - ly) as f32 * 0.01;
+                                    let qy = Quat::from_axis_angle(Vec3::Y, dx);
+                                    let qx = Quat::from_axis_angle(Vec3::X, dy);
+                                    for opt in [&mut current_main, &mut current_sel] {
+                                        if let Some(node) = opt {
+                                            node.rotate(qy);
+                                            node.rotate(qx);
+                                        }
+                                    }
+                                    rotation = qy * rotation;
+                                    rotation = qx * rotation;
+                                }
+                                last_cursor = Some((x, y));
+                            }
+                            Tool::PushPull => {
+                                if let (Some(op), Some(pp)) = (&mut current_op, press_pos) {
+                                    op.offset = (pp.1 - y) * op.scale;
+                                    println!("push/pull offset: {:.4}", op.offset);
                                 }
                             }
-                            rotation = qy * rotation;
-                            rotation = qx * rotation;
                         }
-                        last_cursor = Some((x, y));
                     } else {
                         last_cursor = None;
                     }
@@ -235,30 +296,97 @@ async fn main() {
                 WindowEvent::MouseButton(MouseButton::Button1, Action::Press, _) => {
                     if !ui_wants {
                         press_pos = Some(cursor_pos);
+                        if active_tool == Tool::PushPull {
+                            if selected_face.is_none() {
+                                if let Some(m) = &mesh {
+                                    let picked = pick_face(
+                                        m, centroid, rotation,
+                                        cursor_pos.0, cursor_pos.1,
+                                        win_w, win_h,
+                                    );
+                                    if picked.is_some() {
+                                        selected_face = picked;
+                                        rebuild_scene(
+                                            &mut scene,
+                                            &mut current_main,
+                                            &mut current_sel,
+                                            m,
+                                            centroid,
+                                            selected_face,
+                                            rotation,
+                                        );
+                                    }
+                                }
+                            }
+                            if let (Some(m), Some(sel)) = (&mesh, selected_face) {
+                                let center = face_center_world(m, sel.0 as usize, centroid, rotation);
+                                let scale = pixels_to_world(center, win_w, win_h) as f64;
+                                current_op = Some(PushPullOp {
+                                    mesh_before: m.clone(),
+                                    offset: 0.0,
+                                    error: None,
+                                    scale,
+                                });
+                            }
+                        }
                     }
                 }
                 WindowEvent::MouseButton(MouseButton::Button1, Action::Release, _) => {
                     if !ui_wants {
-                        if let (Some(pp), Some(m)) = (press_pos.take(), &mesh) {
-                            let dx = cursor_pos.0 - pp.0;
-                            let dy = cursor_pos.1 - pp.1;
-                            if (dx * dx + dy * dy).sqrt() < DRAG_THRESHOLD {
-                                let new_sel = pick_face(
-                                    m, centroid, rotation,
-                                    cursor_pos.0, cursor_pos.1,
-                                    win_w, win_h,
-                                );
-                                if new_sel != selected_face {
-                                    selected_face = new_sel;
-                                    rebuild_scene(
-                                        &mut scene,
-                                        &mut current_main,
-                                        &mut current_sel,
-                                        m,
-                                        centroid,
-                                        selected_face,
-                                        rotation,
-                                    );
+                        match active_tool {
+                            Tool::Rotate => {
+                                if let (Some(pp), Some(m)) = (press_pos.take(), &mesh) {
+                                    let dx = cursor_pos.0 - pp.0;
+                                    let dy = cursor_pos.1 - pp.1;
+                                    if (dx * dx + dy * dy).sqrt() < DRAG_THRESHOLD {
+                                        let new_sel = pick_face(
+                                            m, centroid, rotation,
+                                            cursor_pos.0, cursor_pos.1,
+                                            win_w, win_h,
+                                        );
+                                        if new_sel != selected_face {
+                                            selected_face = new_sel;
+                                            rebuild_scene(
+                                                &mut scene,
+                                                &mut current_main,
+                                                &mut current_sel,
+                                                m,
+                                                centroid,
+                                                selected_face,
+                                                rotation,
+                                            );
+                                        }
+                                    }
+                                }
+                            }
+                            Tool::PushPull => {
+                                let was_click = press_pos.map_or(false, |pp| {
+                                    let dx = cursor_pos.0 - pp.0;
+                                    let dy = cursor_pos.1 - pp.1;
+                                    (dx * dx + dy * dy).sqrt() < DRAG_THRESHOLD
+                                });
+                                press_pos = None;
+                                current_op = None;
+                                if was_click {
+                                    if let Some(m) = &mesh {
+                                        let new_sel = pick_face(
+                                            m, centroid, rotation,
+                                            cursor_pos.0, cursor_pos.1,
+                                            win_w, win_h,
+                                        );
+                                        if new_sel != selected_face {
+                                            selected_face = new_sel;
+                                            rebuild_scene(
+                                                &mut scene,
+                                                &mut current_main,
+                                                &mut current_sel,
+                                                m,
+                                                centroid,
+                                                selected_face,
+                                                rotation,
+                                            );
+                                        }
+                                    }
                                 }
                             }
                         }
