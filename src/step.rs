@@ -292,7 +292,9 @@ fn get_bool(p: Option<&Param>) -> Result<bool, StepError> {
     match p {
         Some(Param::Enum(s)) if s == "T" => Ok(true),
         Some(Param::Enum(s)) if s == "F" => Ok(false),
-        other => Err(StepError::Parse(format!("expected bool enum, got {other:?}"))),
+        other => Err(StepError::Parse(format!(
+            "expected bool enum, got {other:?}"
+        ))),
     }
 }
 
@@ -408,16 +410,15 @@ fn build_mesh(entities: &EntityMap) -> Result<Mesh, StepError> {
     for (&id, (typ, params)) in entities {
         if typ == "EDGE_LOOP" {
             let list = get_list(params.get(1))?;
-            let oes: Result<Vec<OrientedEdgeId>, _> = list
-                .iter()
-                .map(|p| {
-                    let sid = get_ref(Some(p))?;
-                    oe_map
-                        .get(&sid)
-                        .copied()
-                        .ok_or_else(|| StepError::Parse(format!("missing ORIENTED_EDGE #{sid}")))
-                })
-                .collect();
+            let oes: Result<Vec<OrientedEdgeId>, _> =
+                list.iter()
+                    .map(|p| {
+                        let sid = get_ref(Some(p))?;
+                        oe_map.get(&sid).copied().ok_or_else(|| {
+                            StepError::Parse(format!("missing ORIENTED_EDGE #{sid}"))
+                        })
+                    })
+                    .collect();
             loop_map.insert(id, oes?);
         }
     }

@@ -6,7 +6,7 @@ use kiss3d::egui;
 use kiss3d::event::{Action, MouseButton, WindowEvent};
 use kiss3d::prelude::*;
 
-use brep::{make_cube, Edge, FaceId, Mesh, OrientedEdge};
+use brep::{Edge, FaceId, Mesh, OrientedEdge, make_cube};
 
 #[derive(PartialEq, Eq)]
 enum Tool {
@@ -32,7 +32,11 @@ fn face_gpu_verts(mesh: &Mesh, face_idx: usize) -> Vec<Vec3> {
         .map(|&oe_id| {
             let oe: &OrientedEdge = &mesh.oriented_edges[oe_id.0 as usize];
             let edge: &Edge = &mesh.edges[oe.edge.0 as usize];
-            let vid = if oe.forward { edge.vertices[0] } else { edge.vertices[1] };
+            let vid = if oe.forward {
+                edge.vertices[0]
+            } else {
+                edge.vertices[1]
+            };
             let p = mesh.vertices[vid.0 as usize].position;
             Vec3::new(p.x as f32, p.y as f32, p.z as f32)
         })
@@ -48,7 +52,11 @@ fn compute_centroid(mesh: &Mesh) -> Vec3 {
             count += 1;
         }
     }
-    if count > 0 { sum / count as f32 } else { Vec3::ZERO }
+    if count > 0 {
+        sum / count as f32
+    } else {
+        Vec3::ZERO
+    }
 }
 
 fn face_center_world(mesh: &Mesh, face_idx: usize, centroid: Vec3, rotation: Quat) -> Vec3 {
@@ -71,10 +79,7 @@ fn pixels_to_world(center_world: Vec3, win_w: f32, win_h: f32) -> f32 {
     // Project center to screen (pixels)
     let ndcx_c = center_world.x / depth / (aspect * tan_hfov);
     let ndcy_c = center_world.y / depth / tan_hfov;
-    let center_on_screen = Vec2::new(
-        (ndcx_c + 1.0) / 2.0 * win_w,
-        (1.0 - ndcy_c) / 2.0 * win_h,
-    );
+    let center_on_screen = Vec2::new((ndcx_c + 1.0) / 2.0 * win_w, (1.0 - ndcy_c) / 2.0 * win_h);
 
     // Shift 1 pixel to the right
     let next_to_center_on_screen = center_on_screen + Vec2::X;
@@ -300,9 +305,13 @@ async fn main() {
                             if selected_face.is_none() {
                                 if let Some(m) = &mesh {
                                     let picked = pick_face(
-                                        m, centroid, rotation,
-                                        cursor_pos.0, cursor_pos.1,
-                                        win_w, win_h,
+                                        m,
+                                        centroid,
+                                        rotation,
+                                        cursor_pos.0,
+                                        cursor_pos.1,
+                                        win_w,
+                                        win_h,
                                     );
                                     if picked.is_some() {
                                         selected_face = picked;
@@ -319,7 +328,8 @@ async fn main() {
                                 }
                             }
                             if let (Some(m), Some(sel)) = (&mesh, selected_face) {
-                                let center = face_center_world(m, sel.0 as usize, centroid, rotation);
+                                let center =
+                                    face_center_world(m, sel.0 as usize, centroid, rotation);
                                 let scale = pixels_to_world(center, win_w, win_h) as f64;
                                 current_op = Some(PushPullOp {
                                     mesh_before: m.clone(),
@@ -340,9 +350,13 @@ async fn main() {
                                     let dy = cursor_pos.1 - pp.1;
                                     if (dx * dx + dy * dy).sqrt() < DRAG_THRESHOLD {
                                         let new_sel = pick_face(
-                                            m, centroid, rotation,
-                                            cursor_pos.0, cursor_pos.1,
-                                            win_w, win_h,
+                                            m,
+                                            centroid,
+                                            rotation,
+                                            cursor_pos.0,
+                                            cursor_pos.1,
+                                            win_w,
+                                            win_h,
                                         );
                                         if new_sel != selected_face {
                                             selected_face = new_sel;
@@ -370,9 +384,13 @@ async fn main() {
                                 if was_click {
                                     if let Some(m) = &mesh {
                                         let new_sel = pick_face(
-                                            m, centroid, rotation,
-                                            cursor_pos.0, cursor_pos.1,
-                                            win_w, win_h,
+                                            m,
+                                            centroid,
+                                            rotation,
+                                            cursor_pos.0,
+                                            cursor_pos.1,
+                                            win_w,
+                                            win_h,
                                         );
                                         if new_sel != selected_face {
                                             selected_face = new_sel;

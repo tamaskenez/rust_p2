@@ -7,37 +7,75 @@ use crate::{Edge, EdgeId, Face, FaceId, Mesh, OrientedEdge, OrientedEdgeId, Vert
 /// viewed from outside.
 pub fn make_cube() -> Mesh {
     let vertices = vec![
-        Vertex { position: Point3::new(0.0, 0.0, 0.0) }, // 0
-        Vertex { position: Point3::new(1.0, 0.0, 0.0) }, // 1
-        Vertex { position: Point3::new(1.0, 1.0, 0.0) }, // 2
-        Vertex { position: Point3::new(0.0, 1.0, 0.0) }, // 3
-        Vertex { position: Point3::new(0.0, 0.0, 1.0) }, // 4
-        Vertex { position: Point3::new(1.0, 0.0, 1.0) }, // 5
-        Vertex { position: Point3::new(1.0, 1.0, 1.0) }, // 6
-        Vertex { position: Point3::new(0.0, 1.0, 1.0) }, // 7
+        Vertex {
+            position: Point3::new(0.0, 0.0, 0.0),
+        }, // 0
+        Vertex {
+            position: Point3::new(1.0, 0.0, 0.0),
+        }, // 1
+        Vertex {
+            position: Point3::new(1.0, 1.0, 0.0),
+        }, // 2
+        Vertex {
+            position: Point3::new(0.0, 1.0, 0.0),
+        }, // 3
+        Vertex {
+            position: Point3::new(0.0, 0.0, 1.0),
+        }, // 4
+        Vertex {
+            position: Point3::new(1.0, 0.0, 1.0),
+        }, // 5
+        Vertex {
+            position: Point3::new(1.0, 1.0, 1.0),
+        }, // 6
+        Vertex {
+            position: Point3::new(0.0, 1.0, 1.0),
+        }, // 7
     ];
 
     // 12 edges; OE slot 0 = forward (id 2i), slot 1 = reversed (id 2i+1)
     let edge_verts: [[u32; 2]; 12] = [
-        [0, 1], [1, 2], [2, 3], [3, 0], // bottom ring  (0–3)
-        [4, 5], [5, 6], [6, 7], [7, 4], // top ring     (4–7)
-        [0, 4], [1, 5], [2, 6], [3, 7], // verticals    (8–11)
+        [0, 1],
+        [1, 2],
+        [2, 3],
+        [3, 0], // bottom ring  (0–3)
+        [4, 5],
+        [5, 6],
+        [6, 7],
+        [7, 4], // top ring     (4–7)
+        [0, 4],
+        [1, 5],
+        [2, 6],
+        [3, 7], // verticals    (8–11)
     ];
     let edges: Vec<Edge> = edge_verts
         .into_iter()
         .enumerate()
         .map(|(i, [v0, v1])| Edge {
             vertices: [VertexId(v0), VertexId(v1)],
-            oriented_edges: [OrientedEdgeId(2 * i as u32), OrientedEdgeId(2 * i as u32 + 1)],
+            oriented_edges: [
+                OrientedEdgeId(2 * i as u32),
+                OrientedEdgeId(2 * i as u32 + 1),
+            ],
         })
         .collect();
 
     // 24 oriented edges; face back-ref filled below
     let mut oriented_edges: Vec<OrientedEdge> = (0u32..12)
-        .flat_map(|i| [
-            OrientedEdge { edge: EdgeId(i), forward: true,  face: FaceId(u32::MAX) },
-            OrientedEdge { edge: EdgeId(i), forward: false, face: FaceId(u32::MAX) },
-        ])
+        .flat_map(|i| {
+            [
+                OrientedEdge {
+                    edge: EdgeId(i),
+                    forward: true,
+                    face: FaceId(u32::MAX),
+                },
+                OrientedEdge {
+                    edge: EdgeId(i),
+                    forward: false,
+                    face: FaceId(u32::MAX),
+                },
+            ]
+        })
         .collect();
 
     // oe(edge_idx, forward) → OrientedEdgeId (forward=2i, reversed=2i+1)
@@ -47,17 +85,35 @@ pub fn make_cube() -> Mesh {
     // Loops are counter-clockwise when viewed from outside.
     let face_data: [(Vec<OrientedEdgeId>, Vector3<f64>); 6] = [
         // bottom z=0, normal (0,0,-1): 0→3→2→1
-        (vec![oe(3,false), oe(2,false), oe(1,false), oe(0,false)], Vector3::new( 0.0,  0.0, -1.0)),
+        (
+            vec![oe(3, false), oe(2, false), oe(1, false), oe(0, false)],
+            Vector3::new(0.0, 0.0, -1.0),
+        ),
         // top    z=1, normal (0,0,+1): 4→5→6→7
-        (vec![oe(4,true),  oe(5,true),  oe(6,true),  oe(7,true)],  Vector3::new( 0.0,  0.0,  1.0)),
+        (
+            vec![oe(4, true), oe(5, true), oe(6, true), oe(7, true)],
+            Vector3::new(0.0, 0.0, 1.0),
+        ),
         // front  y=0, normal (0,-1,0): 0→1→5→4
-        (vec![oe(0,true),  oe(9,true),  oe(4,false), oe(8,false)], Vector3::new( 0.0, -1.0,  0.0)),
+        (
+            vec![oe(0, true), oe(9, true), oe(4, false), oe(8, false)],
+            Vector3::new(0.0, -1.0, 0.0),
+        ),
         // back   y=1, normal (0,+1,0): 2→3→7→6
-        (vec![oe(2,true),  oe(11,true), oe(6,false), oe(10,false)],Vector3::new( 0.0,  1.0,  0.0)),
+        (
+            vec![oe(2, true), oe(11, true), oe(6, false), oe(10, false)],
+            Vector3::new(0.0, 1.0, 0.0),
+        ),
         // left   x=0, normal (-1,0,0): 0→4→7→3
-        (vec![oe(8,true),  oe(7,false), oe(11,false),oe(3,true)],  Vector3::new(-1.0,  0.0,  0.0)),
+        (
+            vec![oe(8, true), oe(7, false), oe(11, false), oe(3, true)],
+            Vector3::new(-1.0, 0.0, 0.0),
+        ),
         // right  x=1, normal (+1,0,0): 1→2→6→5
-        (vec![oe(1,true),  oe(10,true), oe(5,false), oe(9,false)], Vector3::new( 1.0,  0.0,  0.0)),
+        (
+            vec![oe(1, true), oe(10, true), oe(5, false), oe(9, false)],
+            Vector3::new(1.0, 0.0, 0.0),
+        ),
     ];
 
     let mut faces = Vec::with_capacity(6);
@@ -71,7 +127,12 @@ pub fn make_cube() -> Mesh {
         });
     }
 
-    Mesh { vertices, edges, oriented_edges, faces }
+    Mesh {
+        vertices,
+        edges,
+        oriented_edges,
+        faces,
+    }
 }
 
 #[cfg(test)]
@@ -84,7 +145,11 @@ mod tests {
         let m = make_cube();
 
         let errors = validate_mesh(&m);
-        assert!(errors.is_empty(), "mesh validation errors:\n{}", errors.join("\n"));
+        assert!(
+            errors.is_empty(),
+            "mesh validation errors:\n{}",
+            errors.join("\n")
+        );
 
         // Cube-specific counts.
         assert_eq!(m.vertices.len(), 8);

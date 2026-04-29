@@ -1,5 +1,5 @@
 pub mod step;
-pub use step::{load_step, StepError};
+pub use step::{StepError, load_step};
 
 pub mod primitives;
 pub use primitives::make_cube;
@@ -163,8 +163,16 @@ pub fn validate_mesh(mesh: &Mesh) -> Vec<String> {
             }
             let edge_a = &mesh.edges[oe_a.edge.0 as usize];
             let edge_b = &mesh.edges[oe_b.edge.0 as usize];
-            let end_vid   = if oe_a.forward { edge_a.vertices[1] } else { edge_a.vertices[0] };
-            let start_vid = if oe_b.forward { edge_b.vertices[0] } else { edge_b.vertices[1] };
+            let end_vid = if oe_a.forward {
+                edge_a.vertices[1]
+            } else {
+                edge_a.vertices[0]
+            };
+            let start_vid = if oe_b.forward {
+                edge_b.vertices[0]
+            } else {
+                edge_b.vertices[1]
+            };
             if end_vid != start_vid {
                 errors.push(format!(
                     "face {fid}: OE {j} ends at vertex {} but OE {} starts at vertex {}",
@@ -197,15 +205,23 @@ pub fn validate_mesh(mesh: &Mesh) -> Vec<String> {
     for (i, face) in mesh.faces.iter().enumerate() {
         if let Some(stored) = &face.normal {
             let geometry_ok = face.oriented_edges.iter().all(|&oe_id| {
-                if (oe_id.0 as usize) >= n_oes { return false; }
+                if (oe_id.0 as usize) >= n_oes {
+                    return false;
+                }
                 let oe = &mesh.oriented_edges[oe_id.0 as usize];
-                if (oe.edge.0 as usize) >= n_edges { return false; }
+                if (oe.edge.0 as usize) >= n_edges {
+                    return false;
+                }
                 let edge = &mesh.edges[oe.edge.0 as usize];
                 edge.vertices.iter().all(|&vid| (vid.0 as usize) < n_verts)
             });
             if geometry_ok {
                 let computed = compute_face_normal(mesh, FaceId(i as u32));
-                let angle = computed.as_ref().dot(stored.as_ref()).clamp(-1.0, 1.0).acos();
+                let angle = computed
+                    .as_ref()
+                    .dot(stored.as_ref())
+                    .clamp(-1.0, 1.0)
+                    .acos();
                 if angle >= EPS_ANGLE {
                     errors.push(format!(
                         "face {i}: stored normal {:?} does not match computed normal {:?}",
@@ -232,7 +248,11 @@ pub fn compute_face_normal(mesh: &Mesh, face_id: FaceId) -> Unit<Vector3<f64>> {
         .map(|&oe_id| {
             let oe = &mesh.oriented_edges[oe_id.0 as usize];
             let edge = &mesh.edges[oe.edge.0 as usize];
-            let vid = if oe.forward { edge.vertices[0] } else { edge.vertices[1] };
+            let vid = if oe.forward {
+                edge.vertices[0]
+            } else {
+                edge.vertices[1]
+            };
             mesh.vertices[vid.0 as usize].position
         })
         .collect();
@@ -250,4 +270,3 @@ pub fn compute_face_normal(mesh: &Mesh, face_id: FaceId) -> Unit<Vector3<f64>> {
 
     Unit::new_normalize(normal)
 }
-
