@@ -146,8 +146,8 @@ impl std::ops::IndexMut<FaceId> for Vec<Face> {
     }
 }
 
-/// Validates mesh invariants and returns a list of error descriptions.
-pub fn validate_mesh(mesh: &Mesh) -> Vec<String> {
+/// Validates mesh invariants. Returns `Ok(())` if valid, or `Err` with a list of error descriptions.
+pub fn validate_mesh(mesh: &Mesh) -> Result<(), Vec<String>> {
     let mut errors = Vec::new();
     let n_faces = mesh.faces.len();
     let n_oes = mesh.oriented_edges.len();
@@ -330,7 +330,11 @@ pub fn validate_mesh(mesh: &Mesh) -> Vec<String> {
         }
     }
 
-    errors
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(errors)
+    }
 }
 
 /// Computes the normal of a face using Newell's method.

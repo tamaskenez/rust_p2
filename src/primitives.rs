@@ -141,12 +141,8 @@ mod tests {
     fn cube_topology() {
         let m = make_cube();
 
-        let errors = validate_mesh(&m);
-        assert!(
-            errors.is_empty(),
-            "mesh validation errors:\n{}",
-            errors.join("\n")
-        );
+        validate_mesh(&m)
+            .unwrap_or_else(|errors| panic!("mesh validation errors:\n{}", errors.join("\n")));
 
         // Cube-specific counts.
         assert_eq!(m.vertices.len(), 8);
