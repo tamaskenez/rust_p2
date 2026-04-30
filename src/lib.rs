@@ -8,9 +8,11 @@ use nalgebra::Point3;
 use nalgebra::Unit;
 use nalgebra::Vector3;
 
-// Tolerances from Parasolid.
-pub const EPS_LENGTH: f64 = 0.01;
-pub const EPS_ANGLE: f64 = 0.05 * (std::f64::consts::PI / 180.0);
+pub const EPS_LENGTH_USER: f64 = 0.01;
+pub const EPS_LENGTH_SYSTEM: f64 = 1e-12;
+pub const EPS_ANGLE_USER: f64 = 0.05 * (std::f64::consts::PI / 180.0);
+pub const EPS_ANGLE_SYSTEM: f64 = 1e-11;
+pub const FACE_NORMAL_CHECK_MIN_COS_ANGLE: f64 = 1.0 - 1e-11;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct VertexId(pub u32);
@@ -217,14 +219,18 @@ pub fn validate_mesh(mesh: &Mesh) -> Vec<String> {
                 edge.vertices.iter().all(|&vid| (vid.0 as usize) < n_verts)
             });
             if geometry_ok {
-                let computed = compute_face_normal(mesh, FaceId(i as u32));
-                let cos_angle = computed.as_ref().dot(stored.as_ref()).clamp(-1.0, 1.0);
-                if cos_angle < EPS_ANGLE.cos() {
-                    errors.push(format!(
-                        "face {i}: stored normal {:?} does not match computed normal {:?}",
-                        stored.as_ref(),
-                        computed.as_ref(),
-                    ));
+                match compute_face_normal(mesh, FaceId(i as u32)) {
+                    None => errors.push(format!("face {i}: the normal can't be computed")),
+                    Some(computed) => {
+                        let cos_angle = computed.dot(stored);
+                        if !cos_angle.is_finite() || cos_angle < FACE_NORMAL_CHECK_MIN_COS_ANGLE {
+                            errors.push(format!(
+                                "face {i}: stored normal {:?} does not match computed normal {:?}",
+                                stored.as_ref(),
+                                computed.as_ref(),
+                            ));
+                        }
+                    }
                 }
             }
         }
@@ -235,7 +241,8 @@ pub fn validate_mesh(mesh: &Mesh) -> Vec<String> {
 
 /// Computes the normal of a face using Newell's method.
 /// Panics if `face_id` or any referenced id is out of range.
-pub fn compute_face_normal(mesh: &Mesh, face_id: FaceId) -> Unit<Vector3<f64>> {
+/// Returns None if the normal cannot be computed.
+pub fn compute_face_normal(mesh: &Mesh, face_id: FaceId) -> Option<Unit<Vector3<f64>>> {
     let face = &mesh.faces[face_id.0 as usize];
 
     // Collect the start-vertex position of each oriented edge in loop order.
@@ -265,5 +272,5 @@ pub fn compute_face_normal(mesh: &Mesh, face_id: FaceId) -> Unit<Vector3<f64>> {
         normal.z += (vi.x - vj.x) * (vi.y + vj.y);
     }
 
-    Unit::new_normalize(normal)
+    Unit::try_new(normal, EPS_LENGTH_SYSTEM)
 }
