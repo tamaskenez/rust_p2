@@ -30,14 +30,14 @@ fn face_gpu_verts(mesh: &Mesh, face_idx: usize) -> Vec<Vec3> {
     face.oriented_edges
         .iter()
         .map(|&oe_id| {
-            let oe: &OrientedEdge = &mesh.oriented_edges[oe_id.0 as usize];
-            let edge: &Edge = &mesh.edges[oe.edge.0 as usize];
+            let oe: &OrientedEdge = &mesh.oriented_edges[oe_id];
+            let edge: &Edge = &mesh.edges[oe.edge];
             let vid = if oe.forward {
                 edge.vertices[0]
             } else {
                 edge.vertices[1]
             };
-            let p = mesh.vertices[vid.0 as usize].position;
+            let p = mesh.vertices[vid].position;
             Vec3::new(p.x as f32, p.y as f32, p.z as f32)
         })
         .collect()
@@ -59,8 +59,8 @@ fn compute_centroid(mesh: &Mesh) -> Vec3 {
     }
 }
 
-fn face_center_world(mesh: &Mesh, face_idx: usize, centroid: Vec3, rotation: Quat) -> Vec3 {
-    let verts = face_gpu_verts(mesh, face_idx);
+fn face_center_world(mesh: &Mesh, face: FaceId, centroid: Vec3, rotation: Quat) -> Vec3 {
+    let verts = face_gpu_verts(mesh, face.index());
     let raw_center = verts.iter().copied().fold(Vec3::ZERO, |a, v| a + v) / verts.len() as f32;
     rotation * (raw_center - centroid) + Vec3::new(0.0, 0.0, OBJECT_Z)
 }
@@ -151,20 +151,17 @@ fn rebuild_scene(
         n.remove();
     }
 
-    let sel_idx = selected_face.map(|f| f.0 as usize);
-
     *main_node = Some(spawn_node(
         scene,
-        build_gpu_mesh(mesh, centroid, |i| Some(i) != sel_idx),
+        build_gpu_mesh(mesh, centroid, |i| Some(FaceId::new(i)) != selected_face),
         Color::new(0.6, 0.8, 1.0, 1.0),
         rotation,
     ));
 
     if let Some(sel) = selected_face {
-        let si = sel.0 as usize;
         *sel_node = Some(spawn_node(
             scene,
-            build_gpu_mesh(mesh, centroid, |i| i == si),
+            build_gpu_mesh(mesh, centroid, |i| FaceId::new(i) == sel),
             Color::new(1.0, 1.0, 0.0, 1.0),
             rotation,
         ));
@@ -228,7 +225,7 @@ fn pick_face(
             {
                 if t < best_t {
                     best_t = t;
-                    best_face = Some(FaceId(face_idx as u32));
+                    best_face = Some(FaceId::new(face_idx));
                 }
             }
         }
@@ -328,8 +325,7 @@ async fn main() {
                                 }
                             }
                             if let (Some(m), Some(sel)) = (&mesh, selected_face) {
-                                let center =
-                                    face_center_world(m, sel.0 as usize, centroid, rotation);
+                                let center = face_center_world(m, sel, centroid, rotation);
                                 let scale = pixels_to_world(center, win_w, win_h) as f64;
                                 current_op = Some(PushPullOp {
                                     mesh_before: m.clone(),

@@ -346,7 +346,7 @@ fn build_mesh(entities: &EntityMap) -> Result<Mesh, StepError> {
             .get(&cp_id)
             .copied()
             .ok_or_else(|| StepError::Parse(format!("missing CARTESIAN_POINT #{cp_id}")))?;
-        let vid = VertexId(mesh.vertices.len() as u32);
+        let vid = VertexId::new(mesh.vertices.len());
         mesh.vertices.push(Vertex { position: pos });
         vertex_map.insert(step_id, vid);
     }
@@ -370,10 +370,10 @@ fn build_mesh(entities: &EntityMap) -> Result<Mesh, StepError> {
         let v1 = *vertex_map
             .get(&ve)
             .ok_or_else(|| StepError::Parse(format!("missing VERTEX_POINT #{ve}")))?;
-        let eid = EdgeId(mesh.edges.len() as u32);
+        let eid = EdgeId::new(mesh.edges.len());
         mesh.edges.push(Edge {
             vertices: [v0, v1],
-            oriented_edges: [OrientedEdgeId(u32::MAX), OrientedEdgeId(u32::MAX)],
+            oriented_edges: [OrientedEdgeId::INVALID, OrientedEdgeId::INVALID],
         });
         edge_map.insert(step_id, eid);
     }
@@ -395,14 +395,14 @@ fn build_mesh(entities: &EntityMap) -> Result<Mesh, StepError> {
         let eid = *edge_map
             .get(&ec_step)
             .ok_or_else(|| StepError::Parse(format!("missing EDGE_CURVE #{ec_step}")))?;
-        let oe_id = OrientedEdgeId(mesh.oriented_edges.len() as u32);
+        let oe_id = OrientedEdgeId::new(mesh.oriented_edges.len());
         mesh.oriented_edges.push(OrientedEdge {
             edge: eid,
             forward,
-            face: FaceId(u32::MAX),
+            face: FaceId::INVALID,
         });
         oe_map.insert(step_id, oe_id);
-        mesh.edges[eid.0 as usize].oriented_edges[if forward { 0 } else { 1 }] = oe_id;
+        mesh.edges[eid].oriented_edges[if forward { 0 } else { 1 }] = oe_id;
     }
 
     // EDGE_LOOP('', (#oe1, #oe2, ...))
@@ -467,9 +467,9 @@ fn build_mesh(entities: &EntityMap) -> Result<Mesh, StepError> {
             .cloned()
             .ok_or_else(|| StepError::Parse(format!("missing EDGE_LOOP #{loop_step}")))?;
 
-        let fid = FaceId(mesh.faces.len() as u32);
+        let fid = FaceId::new(mesh.faces.len());
         for &oe_id in &oe_list {
-            mesh.oriented_edges[oe_id.0 as usize].face = fid;
+            mesh.oriented_edges[oe_id].face = fid;
         }
         mesh.faces.push(Face {
             oriented_edges: oe_list,
@@ -479,7 +479,7 @@ fn build_mesh(entities: &EntityMap) -> Result<Mesh, StepError> {
 
     // Validate that every oriented edge was claimed by a face.
     for (i, oe) in mesh.oriented_edges.iter().enumerate() {
-        if oe.face.0 == u32::MAX {
+        if oe.face == FaceId::INVALID {
             return Err(StepError::Parse(format!(
                 "oriented_edge {i} was not assigned to any face"
             )));
@@ -487,7 +487,9 @@ fn build_mesh(entities: &EntityMap) -> Result<Mesh, StepError> {
     }
     // Validate that every edge has both oriented-edge back-refs filled.
     for (i, edge) in mesh.edges.iter().enumerate() {
-        if edge.oriented_edges[0].0 == u32::MAX || edge.oriented_edges[1].0 == u32::MAX {
+        if edge.oriented_edges[0] == OrientedEdgeId::INVALID
+            || edge.oriented_edges[1] == OrientedEdgeId::INVALID
+        {
             return Err(StepError::Parse(format!(
                 "edge {i} is missing a forward or reversed oriented_edge back-ref"
             )));

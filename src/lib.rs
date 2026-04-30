@@ -15,16 +15,54 @@ pub const EPS_ANGLE_SYSTEM: f64 = 1e-11;
 pub const FACE_NORMAL_CHECK_MIN_COS_ANGLE: f64 = 1.0 - 1e-11;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub struct VertexId(pub u32);
+pub struct VertexId(u32);
+
+impl VertexId {
+    pub fn new(idx: usize) -> Self {
+        Self(idx as u32)
+    }
+    pub fn index(self) -> usize {
+        self.0 as usize
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub struct EdgeId(pub u32);
+pub struct EdgeId(u32);
+
+impl EdgeId {
+    pub fn new(idx: usize) -> Self {
+        Self(idx as u32)
+    }
+    pub fn index(self) -> usize {
+        self.0 as usize
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub struct OrientedEdgeId(pub u32);
+pub struct OrientedEdgeId(u32);
+
+impl OrientedEdgeId {
+    pub const INVALID: Self = Self(u32::MAX);
+    pub fn new(idx: usize) -> Self {
+        Self(idx as u32)
+    }
+    pub fn index(self) -> usize {
+        self.0 as usize
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub struct FaceId(pub u32);
+pub struct FaceId(u32);
+
+impl FaceId {
+    pub const INVALID: Self = Self(u32::MAX);
+    pub fn new(idx: usize) -> Self {
+        Self(idx as u32)
+    }
+    pub fn index(self) -> usize {
+        self.0 as usize
+    }
+}
 
 #[derive(Clone)]
 pub struct Vertex {
@@ -60,6 +98,54 @@ pub struct Mesh {
     pub faces: Vec<Face>,
 }
 
+impl std::ops::Index<VertexId> for Vec<Vertex> {
+    type Output = Vertex;
+    fn index(&self, id: VertexId) -> &Vertex {
+        &self[id.index()]
+    }
+}
+impl std::ops::IndexMut<VertexId> for Vec<Vertex> {
+    fn index_mut(&mut self, id: VertexId) -> &mut Vertex {
+        &mut self[id.index()]
+    }
+}
+
+impl std::ops::Index<EdgeId> for Vec<Edge> {
+    type Output = Edge;
+    fn index(&self, id: EdgeId) -> &Edge {
+        &self[id.index()]
+    }
+}
+impl std::ops::IndexMut<EdgeId> for Vec<Edge> {
+    fn index_mut(&mut self, id: EdgeId) -> &mut Edge {
+        &mut self[id.index()]
+    }
+}
+
+impl std::ops::Index<OrientedEdgeId> for Vec<OrientedEdge> {
+    type Output = OrientedEdge;
+    fn index(&self, id: OrientedEdgeId) -> &OrientedEdge {
+        &self[id.index()]
+    }
+}
+impl std::ops::IndexMut<OrientedEdgeId> for Vec<OrientedEdge> {
+    fn index_mut(&mut self, id: OrientedEdgeId) -> &mut OrientedEdge {
+        &mut self[id.index()]
+    }
+}
+
+impl std::ops::Index<FaceId> for Vec<Face> {
+    type Output = Face;
+    fn index(&self, id: FaceId) -> &Face {
+        &self[id.index()]
+    }
+}
+impl std::ops::IndexMut<FaceId> for Vec<Face> {
+    fn index_mut(&mut self, id: FaceId) -> &mut Face {
+        &mut self[id.index()]
+    }
+}
+
 /// Validates mesh invariants and returns a list of error descriptions.
 pub fn validate_mesh(mesh: &Mesh) -> Vec<String> {
     let mut errors = Vec::new();
@@ -71,32 +157,34 @@ pub fn validate_mesh(mesh: &Mesh) -> Vec<String> {
     // Every edge must reference valid vertices and valid OE back-refs.
     for (i, edge) in mesh.edges.iter().enumerate() {
         for (slot, &vid) in edge.vertices.iter().enumerate() {
-            if (vid.0 as usize) >= n_verts {
+            if vid.index() >= n_verts {
                 errors.push(format!(
                     "edge {i}: vertex slot {slot} ref {} out of range (mesh has {n_verts} vertices)",
-                    vid.0,
+                    vid.index(),
                 ));
             }
         }
         for (slot, &oe_id) in edge.oriented_edges.iter().enumerate() {
-            if oe_id.0 as usize >= n_oes {
+            if oe_id.index() >= n_oes {
                 errors.push(format!(
                     "edge {i}: OE slot {slot} ref {} out of range (mesh has {n_oes} oriented edges)",
-                    oe_id.0,
+                    oe_id.index(),
                 ));
             } else {
-                let oe = &mesh.oriented_edges[oe_id.0 as usize];
-                if oe.edge != EdgeId(i as u32) {
+                let oe = &mesh.oriented_edges[oe_id];
+                if oe.edge != EdgeId::new(i) {
                     errors.push(format!(
                         "edge {i}: OE slot {slot} (id {}) back-references edge {}, expected {i}",
-                        oe_id.0, oe.edge.0,
+                        oe_id.index(),
+                        oe.edge.index(),
                     ));
                 }
                 let expected_forward = slot == 0;
                 if oe.forward != expected_forward {
                     errors.push(format!(
                         "edge {i}: OE slot {slot} (id {}) has forward={}, expected {expected_forward}",
-                        oe_id.0, oe.forward,
+                        oe_id.index(),
+                        oe.forward,
                     ));
                 }
             }
@@ -105,24 +193,24 @@ pub fn validate_mesh(mesh: &Mesh) -> Vec<String> {
 
     // Every oriented edge must reference a valid edge and face.
     for (i, oe) in mesh.oriented_edges.iter().enumerate() {
-        if oe.edge.0 as usize >= n_edges {
+        if oe.edge.index() >= n_edges {
             errors.push(format!(
                 "oriented_edge {i}: edge ref {} out of range (mesh has {n_edges} edges)",
-                oe.edge.0,
+                oe.edge.index(),
             ));
         }
-        if oe.face.0 as usize >= n_faces {
+        if oe.face.index() >= n_faces {
             errors.push(format!(
                 "oriented_edge {i}: face back-ref {} out of range (mesh has {n_faces} faces)",
-                oe.face.0,
+                oe.face.index(),
             ));
-        } else if !mesh.faces[oe.face.0 as usize]
+        } else if !mesh.faces[oe.face]
             .oriented_edges
-            .contains(&OrientedEdgeId(i as u32))
+            .contains(&OrientedEdgeId::new(i))
         {
             errors.push(format!(
                 "oriented_edge {i}: face back-ref {} does not contain it in its loop",
-                oe.face.0,
+                oe.face.index(),
             ));
         }
     }
@@ -131,12 +219,12 @@ pub fn validate_mesh(mesh: &Mesh) -> Vec<String> {
     let mut counts = vec![0u32; n_oes];
     for (fid, face) in mesh.faces.iter().enumerate() {
         for &oe_id in &face.oriented_edges {
-            if (oe_id.0 as usize) < n_oes {
-                counts[oe_id.0 as usize] += 1;
+            if oe_id.index() < n_oes {
+                counts[oe_id.index()] += 1;
             } else {
                 errors.push(format!(
                     "face {fid}: OE ref {} out of range (mesh has {n_oes} oriented edges)",
-                    oe_id.0,
+                    oe_id.index(),
                 ));
             }
         }
@@ -156,16 +244,16 @@ pub fn validate_mesh(mesh: &Mesh) -> Vec<String> {
         for j in 0..n {
             let oe_a_id = oes[j];
             let oe_b_id = oes[(j + 1) % n];
-            if (oe_a_id.0 as usize) >= n_oes || (oe_b_id.0 as usize) >= n_oes {
+            if oe_a_id.index() >= n_oes || oe_b_id.index() >= n_oes {
                 continue;
             }
-            let oe_a = &mesh.oriented_edges[oe_a_id.0 as usize];
-            let oe_b = &mesh.oriented_edges[oe_b_id.0 as usize];
-            if (oe_a.edge.0 as usize) >= n_edges || (oe_b.edge.0 as usize) >= n_edges {
+            let oe_a = &mesh.oriented_edges[oe_a_id];
+            let oe_b = &mesh.oriented_edges[oe_b_id];
+            if oe_a.edge.index() >= n_edges || oe_b.edge.index() >= n_edges {
                 continue;
             }
-            let edge_a = &mesh.edges[oe_a.edge.0 as usize];
-            let edge_b = &mesh.edges[oe_b.edge.0 as usize];
+            let edge_a = &mesh.edges[oe_a.edge];
+            let edge_b = &mesh.edges[oe_b.edge];
             let end_vid = if oe_a.forward {
                 edge_a.vertices[1]
             } else {
@@ -179,9 +267,9 @@ pub fn validate_mesh(mesh: &Mesh) -> Vec<String> {
             if end_vid != start_vid {
                 errors.push(format!(
                     "face {fid}: OE {j} ends at vertex {} but OE {} starts at vertex {}",
-                    end_vid.0,
+                    end_vid.index(),
                     (j + 1) % n,
-                    start_vid.0,
+                    start_vid.index(),
                 ));
             }
         }
@@ -190,15 +278,15 @@ pub fn validate_mesh(mesh: &Mesh) -> Vec<String> {
     // Closed-manifold: each edge's two oriented edges must belong to different faces.
     for (i, edge) in mesh.edges.iter().enumerate() {
         let [oe0_id, oe1_id] = edge.oriented_edges;
-        if (oe0_id.0 as usize) >= n_oes || (oe1_id.0 as usize) >= n_oes {
+        if oe0_id.index() >= n_oes || oe1_id.index() >= n_oes {
             continue;
         }
-        let face0 = mesh.oriented_edges[oe0_id.0 as usize].face;
-        let face1 = mesh.oriented_edges[oe1_id.0 as usize].face;
-        if (face0.0 as usize) < n_faces && (face1.0 as usize) < n_faces && face0 == face1 {
+        let face0 = mesh.oriented_edges[oe0_id].face;
+        let face1 = mesh.oriented_edges[oe1_id].face;
+        if face0.index() < n_faces && face1.index() < n_faces && face0 == face1 {
             errors.push(format!(
                 "edge {i}: both oriented edges belong to face {} (non-manifold)",
-                face0.0,
+                face0.index(),
             ));
         }
     }
@@ -214,18 +302,18 @@ pub fn validate_mesh(mesh: &Mesh) -> Vec<String> {
         }
         if let Some(stored) = &face.normal {
             let geometry_ok = face.oriented_edges.iter().all(|&oe_id| {
-                if (oe_id.0 as usize) >= n_oes {
+                if oe_id.index() >= n_oes {
                     return false;
                 }
-                let oe = &mesh.oriented_edges[oe_id.0 as usize];
-                if (oe.edge.0 as usize) >= n_edges {
+                let oe = &mesh.oriented_edges[oe_id];
+                if oe.edge.index() >= n_edges {
                     return false;
                 }
-                let edge = &mesh.edges[oe.edge.0 as usize];
-                edge.vertices.iter().all(|&vid| (vid.0 as usize) < n_verts)
+                let edge = &mesh.edges[oe.edge];
+                edge.vertices.iter().all(|&vid| vid.index() < n_verts)
             });
             if geometry_ok {
-                match compute_face_normal(mesh, FaceId(i as u32)) {
+                match compute_face_normal(mesh, FaceId::new(i)) {
                     None => errors.push(format!("face {i}: the normal can't be computed")),
                     Some(computed) => {
                         let cos_angle = computed.dot(stored);
@@ -249,21 +337,21 @@ pub fn validate_mesh(mesh: &Mesh) -> Vec<String> {
 /// Panics if `face_id` or any referenced id is out of range.
 /// Returns None if the normal cannot be computed.
 pub fn compute_face_normal(mesh: &Mesh, face_id: FaceId) -> Option<Unit<Vector3<f64>>> {
-    let face = &mesh.faces[face_id.0 as usize];
+    let face = &mesh.faces[face_id];
 
     // Collect the start-vertex position of each oriented edge in loop order.
     let positions: Vec<_> = face
         .oriented_edges
         .iter()
         .map(|&oe_id| {
-            let oe = &mesh.oriented_edges[oe_id.0 as usize];
-            let edge = &mesh.edges[oe.edge.0 as usize];
+            let oe = &mesh.oriented_edges[oe_id];
+            let edge = &mesh.edges[oe.edge];
             let vid = if oe.forward {
                 edge.vertices[0]
             } else {
                 edge.vertices[1]
             };
-            mesh.vertices[vid.0 as usize].position
+            mesh.vertices[vid].position
         })
         .collect();
 

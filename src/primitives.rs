@@ -34,7 +34,7 @@ pub fn make_cube() -> Mesh {
     ];
 
     // 12 edges; OE slot 0 = forward (id 2i), slot 1 = reversed (id 2i+1)
-    let edge_verts: [[u32; 2]; 12] = [
+    let edge_verts: [[usize; 2]; 12] = [
         [0, 1],
         [1, 2],
         [2, 3],
@@ -52,34 +52,31 @@ pub fn make_cube() -> Mesh {
         .into_iter()
         .enumerate()
         .map(|(i, [v0, v1])| Edge {
-            vertices: [VertexId(v0), VertexId(v1)],
-            oriented_edges: [
-                OrientedEdgeId(2 * i as u32),
-                OrientedEdgeId(2 * i as u32 + 1),
-            ],
+            vertices: [VertexId::new(v0), VertexId::new(v1)],
+            oriented_edges: [OrientedEdgeId::new(2 * i), OrientedEdgeId::new(2 * i + 1)],
         })
         .collect();
 
     // 24 oriented edges; face back-ref filled below
-    let mut oriented_edges: Vec<OrientedEdge> = (0u32..12)
+    let mut oriented_edges: Vec<OrientedEdge> = (0usize..12)
         .flat_map(|i| {
             [
                 OrientedEdge {
-                    edge: EdgeId(i),
+                    edge: EdgeId::new(i),
                     forward: true,
-                    face: FaceId(u32::MAX),
+                    face: FaceId::INVALID,
                 },
                 OrientedEdge {
-                    edge: EdgeId(i),
+                    edge: EdgeId::new(i),
                     forward: false,
-                    face: FaceId(u32::MAX),
+                    face: FaceId::INVALID,
                 },
             ]
         })
         .collect();
 
     // oe(edge_idx, forward) → OrientedEdgeId (forward=2i, reversed=2i+1)
-    let oe = |e: u32, fwd: bool| OrientedEdgeId(2 * e + if fwd { 0 } else { 1 });
+    let oe = |e: usize, fwd: bool| OrientedEdgeId::new(2 * e + if fwd { 0 } else { 1 });
 
     // Each face: (oriented-edge loop, outward normal).
     // Loops are counter-clockwise when viewed from outside.
@@ -119,7 +116,7 @@ pub fn make_cube() -> Mesh {
     let mut faces = Vec::with_capacity(6);
     for (fid, (oe_list, normal_vec)) in face_data.into_iter().enumerate() {
         for &oe_id in &oe_list {
-            oriented_edges[oe_id.0 as usize].face = FaceId(fid as u32);
+            oriented_edges[oe_id].face = FaceId::new(fid);
         }
         faces.push(Face {
             oriented_edges: oe_list,
