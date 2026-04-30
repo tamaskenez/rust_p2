@@ -13,8 +13,9 @@ pub const EPS_LENGTH_SYSTEM: f64 = 1e-12;
 pub const EPS_ANGLE_USER: f64 = 0.05 * (std::f64::consts::PI / 180.0);
 pub const EPS_ANGLE_SYSTEM: f64 = 1e-11;
 pub const FACE_NORMAL_CHECK_MIN_COS_ANGLE: f64 = 1.0 - 1e-11;
+pub const MAX_ORTHOGONAL_COS_ANGLE: f64 = 1e-11;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Ord, PartialOrd)]
 pub struct VertexId(u32);
 
 impl VertexId {
@@ -51,7 +52,7 @@ impl OrientedEdgeId {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Ord, PartialOrd)]
 pub struct FaceId(u32);
 
 impl FaceId {
@@ -96,6 +97,49 @@ pub struct Mesh {
     pub edges: Vec<Edge>,
     pub oriented_edges: Vec<OrientedEdge>,
     pub faces: Vec<Face>,
+}
+
+impl Mesh {
+    pub fn face_normal(&mut self, fid: FaceId) -> Option<Unit<Vector3<f64>>> {
+        if let Some(n) = self.faces[fid].normal {
+            return Some(n);
+        }
+        let n = compute_face_normal(self, fid)?;
+        self.faces[fid].normal = Some(n);
+        Some(n)
+    }
+
+    // Returns sorted, deduped list.
+    pub fn adjacent_faces(&self, fid: FaceId) -> Vec<FaceId> {
+        let mut faces: Vec<FaceId> = self.faces[fid]
+            .oriented_edges
+            .iter()
+            .map(|&oeid| {
+                let oe = &self.oriented_edges[oeid];
+                let oes_of_edge_of_oe = &self.edges[oe.edge].oriented_edges;
+                // Find the twin oriented edge.
+                let opposite_oeid = if oe.forward {
+                    oes_of_edge_of_oe[1]
+                } else {
+                    oes_of_edge_of_oe[0]
+                };
+                self.oriented_edges[opposite_oeid].face
+            })
+            .collect();
+        faces.sort_unstable();
+        faces.dedup();
+        faces
+    }
+    pub fn vertices_of_face(&self, fid: FaceId) -> Vec<VertexId> {
+        self.faces[fid]
+            .oriented_edges
+            .iter()
+            .map(|&oeid| {
+                let oe = &self.oriented_edges[oeid];
+                self.edges[oe.edge].vertices[oe.forward as usize]
+            })
+            .collect()
+    }
 }
 
 impl std::ops::Index<VertexId> for Vec<Vertex> {
@@ -371,4 +415,109 @@ pub fn compute_face_normal(mesh: &Mesh, face_id: FaceId) -> Option<Unit<Vector3<
     }
 
     Unit::try_new(normal, EPS_LENGTH_SYSTEM)
+}
+
+// Moves the face outwards with `offset` which must be nonnegative.
+// For now only works if all adjacent faces are orthogonal to the moved face.
+pub fn pull_face(mesh: &mut Mesh, fid: FaceId, offset: f64) -> Result<(), String> {
+    if offset == 0.0 {
+        return Ok(());
+    }
+    assert!(offset > 0.0);
+
+    let face_normal = mesh
+        .face_normal(fid)
+        .ok_or_else(|| format!("Face normal computation failed for face {}", fid.index()))?;
+
+    // Enumerate adjacent faces and collect orthogonal and other faces.
+    let mut orthogonal_faces: Vec<FaceId> = vec![];
+    let mut other_faces: Vec<FaceId> = vec![];
+    for afid in mesh.adjacent_faces(fid) {
+        let adjacent_face_normal = mesh
+            .face_normal(afid)
+            .ok_or_else(|| format!("Face normal computation failed for face {}", afid.index()))?;
+        if adjacent_face_normal.dot(face_normal.as_ref()).abs() < MAX_ORTHOGONAL_COS_ANGLE {
+            orthogonal_faces.push(afid);
+        } else {
+            other_faces.push(afid);
+        }
+    }
+
+    // Temporary constraint
+    assert!(other_faces.is_empty());
+    // With orthogonal faces simply move the vertices.
+    let vertices = mesh.vertices_of_face(fid);
+    let vertex_offset = face_normal.into_inner() * offset;
+    for &vid in &vertices {
+        mesh.vertices[vid].position += vertex_offset;
+    }
+
+    Ok(())
+}
+
+pub fn push_face(mesh: &mut Mesh, fid: FaceId, offset: f64) -> Result<(), String> {
+    if offset == 0.0 {
+        return Ok(());
+    }
+    assert!(offset < 0.0);
+    Ok(())
+}
+
+pub fn push_pull_face(mesh: &mut Mesh, fid: FaceId, offset: f64) -> Result<(), String> {
+    if offset < 0.0 {
+        push_face(mesh, fid, offset)
+    } else {
+        pull_face(mesh, fid, offset)
+    }
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::primitives::make_cube;
+    #[test]
+    fn adjacent_faces_of_cube() {
+        let m = make_cube();
+        assert_eq!(
+            m.adjacent_faces(FaceId::new(2)),
+            vec![
+                FaceId::new(0),
+                FaceId::new(1),
+                FaceId::new(4),
+                FaceId::new(5)
+            ]
+        );
+        assert_eq!(
+            m.adjacent_faces(FaceId::new(3)),
+            vec![
+                FaceId::new(0),
+                FaceId::new(1),
+                FaceId::new(4),
+                FaceId::new(5)
+            ]
+        );
+        assert_eq!(
+            m.adjacent_faces(FaceId::new(1)),
+            vec![
+                FaceId::new(2),
+                FaceId::new(3),
+                FaceId::new(4),
+                FaceId::new(5)
+            ]
+        );
+    }
+    #[test]
+    fn vertices_of_face() {
+        let m = make_cube();
+        let mut vertices = m.vertices_of_face(FaceId::new(2));
+        vertices.sort_unstable();
+        assert_eq!(
+            vertices,
+            vec![
+                VertexId::new(0),
+                VertexId::new(1),
+                VertexId::new(4),
+                VertexId::new(5)
+            ]
+        );
+    }
 }
