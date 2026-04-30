@@ -206,6 +206,12 @@ pub fn validate_mesh(mesh: &Mesh) -> Vec<String> {
     // If a stored normal is present, it must match the computed one.
     // Only check faces whose geometry is fully in range to avoid panicking.
     for (i, face) in mesh.faces.iter().enumerate() {
+        if face.oriented_edges.len() < 3 {
+            errors.push(format!(
+                "face {i}: has only {} vertices/edges",
+                face.oriented_edges.len()
+            ));
+        }
         if let Some(stored) = &face.normal {
             let geometry_ok = face.oriented_edges.iter().all(|&oe_id| {
                 if (oe_id.0 as usize) >= n_oes {
