@@ -6,7 +6,7 @@ use kiss3d::egui;
 use kiss3d::event::{Action, MouseButton, WindowEvent};
 use kiss3d::prelude::*;
 
-use brep::{Edge, FaceId, Mesh, OrientedEdge, make_cube};
+use brep::{Edge, FaceId, Mesh, OrientedEdge, compute_face_normal, make_cube, push_pull_face};
 
 #[derive(PartialEq, Eq)]
 enum Tool {
@@ -19,6 +19,7 @@ struct PushPullOp {
     offset: f64,
     error: Option<String>,
     scale: f64,
+    screen_normal: Vec2,
 }
 
 const OBJECT_Z: f32 = -3.0;
@@ -97,6 +98,34 @@ fn pixels_to_world(center_world: Vec3, win_w: f32, win_h: f32) -> f32 {
     // world distance / screen distance (= 1 pixel by construction)
     (center_world - next_to_center).length()
         / (center_on_screen - next_to_center_on_screen).length()
+}
+
+fn world_to_screen(p: Vec3, win_w: f32, win_h: f32) -> Vec2 {
+    let tan_hfov = (FOV_Y / 2.0).tan();
+    let aspect = win_w / win_h;
+    let d = -p.z;
+    Vec2::new(
+        (p.x / d / (aspect * tan_hfov) + 1.0) / 2.0 * win_w,
+        (1.0 - p.y / d / tan_hfov) / 2.0 * win_h,
+    )
+}
+
+fn face_normal_screen(
+    mesh: &Mesh,
+    fid: FaceId,
+    centroid: Vec3,
+    rotation: Quat,
+    win_w: f32,
+    win_h: f32,
+) -> Vec2 {
+    let center_world = face_center_world(mesh, fid, centroid, rotation);
+    let dir = compute_face_normal(mesh, fid).map_or(Vec2::ZERO, |n| {
+        let n_world = rotation * Vec3::new(n.x as f32, n.y as f32, n.z as f32);
+        world_to_screen(center_world + n_world, win_w, win_h)
+            - world_to_screen(center_world, win_w, win_h)
+    });
+    let len = dir.length();
+    if len < 1e-7 { Vec2::X } else { dir / len }
 }
 
 fn build_gpu_mesh(mesh: &Mesh, centroid: Vec3, face_mask: impl Fn(usize) -> bool) -> GpuMesh3d {
@@ -285,9 +314,26 @@ async fn main() {
                                 last_cursor = Some((x, y));
                             }
                             Tool::PushPull => {
-                                if let (Some(op), Some(pp)) = (&mut current_op, press_pos) {
-                                    op.offset = (pp.1 - y) * op.scale;
-                                    println!("push/pull offset: {:.4}", op.offset);
+                                if let (Some(op), Some(pp), Some(sel)) =
+                                    (&mut current_op, press_pos, selected_face)
+                                {
+                                    let drag = Vec2::new((x - pp.0) as f32, (y - pp.1) as f32);
+                                    op.offset = op.screen_normal.dot(drag) as f64 * op.scale;
+                                    if let Some(m) = &mut mesh {
+                                        *m = op.mesh_before.clone();
+                                        if push_pull_face(m, sel, op.offset).is_err() {
+                                            *m = op.mesh_before.clone();
+                                        }
+                                        rebuild_scene(
+                                            &mut scene,
+                                            &mut current_main,
+                                            &mut current_sel,
+                                            m,
+                                            centroid,
+                                            selected_face,
+                                            rotation,
+                                        );
+                                    }
                                 }
                             }
                         }
@@ -327,11 +373,14 @@ async fn main() {
                             if let (Some(m), Some(sel)) = (&mesh, selected_face) {
                                 let center = face_center_world(m, sel, centroid, rotation);
                                 let scale = pixels_to_world(center, win_w, win_h) as f64;
+                                let screen_normal =
+                                    face_normal_screen(m, sel, centroid, rotation, win_w, win_h);
                                 current_op = Some(PushPullOp {
                                     mesh_before: m.clone(),
                                     offset: 0.0,
                                     error: None,
                                     scale,
+                                    screen_normal,
                                 });
                             }
                         }
@@ -377,6 +426,20 @@ async fn main() {
                                 });
                                 press_pos = None;
                                 current_op = None;
+                                if let Some(m) = &mesh {
+                                    centroid = compute_centroid(m);
+                                    if !was_click {
+                                        rebuild_scene(
+                                            &mut scene,
+                                            &mut current_main,
+                                            &mut current_sel,
+                                            m,
+                                            centroid,
+                                            selected_face,
+                                            rotation,
+                                        );
+                                    }
+                                }
                                 if was_click {
                                     if let Some(m) = &mesh {
                                         let new_sel = pick_face(
