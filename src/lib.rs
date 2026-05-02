@@ -29,7 +29,7 @@ impl VertexId {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Ord, PartialOrd)]
 pub struct EdgeId(u32);
 
 impl EdgeId {
@@ -607,6 +607,21 @@ mod tests {
                 VertexId::new(1),
                 VertexId::new(4),
                 VertexId::new(5)
+            ]
+        );
+    }
+    #[test]
+    fn edges_of_face() {
+        let m = make_cube();
+        let mut edges = m.edges_of_face(FaceId::new(2));
+        edges.sort_unstable();
+        assert_eq!(
+            edges,
+            vec![
+                EdgeId::new(0),
+                EdgeId::new(4),
+                EdgeId::new(8),
+                EdgeId::new(9)
             ]
         );
     }
