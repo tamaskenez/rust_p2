@@ -77,7 +77,7 @@ pub struct Vertex {
 #[derive(Clone)]
 pub struct Edge {
     pub vertices: [VertexId; 2],
-    pub oriented_edges: [OrientedEdgeId; 2],
+    pub oriented_edges: [OrientedEdgeId; 2], // [0] is forward, [1] is backward.
 }
 
 #[derive(Clone)]
@@ -111,9 +111,8 @@ impl Mesh {
         Some(n)
     }
 
-    // Returns sorted, deduped list.
     pub fn adjacent_faces(&self, fid: FaceId) -> Vec<FaceId> {
-        let mut faces: Vec<FaceId> = self.faces[fid]
+        self.faces[fid]
             .oriented_edges
             .iter()
             .map(|&oeid| {
@@ -127,10 +126,7 @@ impl Mesh {
                 };
                 self.oriented_edges[opposite_oeid].face
             })
-            .collect();
-        faces.sort_unstable();
-        faces.dedup();
-        faces
+            .collect()
     }
     pub fn edges_of_face(&self, fid: FaceId) -> Vec<EdgeId> {
         self.faces[fid]
@@ -145,7 +141,7 @@ impl Mesh {
             .iter()
             .map(|&oeid| {
                 let oe = &self.oriented_edges[oeid];
-                self.edges[oe.edge].vertices[oe.forward as usize]
+                self.edges[oe.edge].vertices[!oe.forward as usize] // Use the first vertex.
             })
             .collect()
     }
@@ -428,41 +424,38 @@ pub fn compute_face_normal(mesh: &Mesh, face_id: FaceId) -> Option<Unit<Vector3<
 
 struct PushPullWorkspace {
     pub face_normal: Unit<Vector3<f64>>,
-    pub orthogonal_faces: Vec<FaceId>,
-    pub other_faces: Vec<FaceId>,
+    pub adjacent_faces: Vec<FaceId>,
+    pub orthogonal_face_flags: Vec<bool>,
+    pub all_faces_orthogonal: bool,
     pub vertices_of_face: Vec<VertexId>,
+    pub edges_of_face: Vec<EdgeId>,
 }
 
-fn make_push_pull_workspace(
-    mesh: &mut Mesh,
-    fid: FaceId,
-    offset: f64,
-) -> Result<PushPullWorkspace, String> {
-    let mut wsp: PushPullWorkspace;
-
+fn make_push_pull_workspace(mesh: &mut Mesh, fid: FaceId) -> Result<PushPullWorkspace, String> {
     let face_normal = mesh
         .face_normal(fid)
         .ok_or_else(|| format!("Face normal computation failed for face {}", fid.index()))?;
 
     // Enumerate adjacent faces and collect orthogonal and other faces.
-    let mut orthogonal_faces: Vec<FaceId> = vec![];
-    let mut other_faces: Vec<FaceId> = vec![];
-    for afid in mesh.adjacent_faces(fid) {
+    let adjacent_faces = mesh.adjacent_faces(fid);
+    let mut orthogonal_face_flags: Vec<bool> = Vec::with_capacity(adjacent_faces.len());
+    let mut all_faces_orthogonal = true;
+    for &afid in &adjacent_faces {
         let adjacent_face_normal = mesh
             .face_normal(afid)
             .ok_or_else(|| format!("Face normal computation failed for face {}", afid.index()))?;
-        if adjacent_face_normal.dot(face_normal.as_ref()).abs() < MAX_ORTHOGONAL_COS_ANGLE {
-            orthogonal_faces.push(afid);
-        } else {
-            other_faces.push(afid);
-        }
+        let b = adjacent_face_normal.dot(face_normal.as_ref()).abs() < MAX_ORTHOGONAL_COS_ANGLE;
+        all_faces_orthogonal &= b;
+        orthogonal_face_flags.push(b);
     }
 
     Ok(PushPullWorkspace {
         face_normal: face_normal,
-        orthogonal_faces: orthogonal_faces,
-        other_faces: other_faces,
+        adjacent_faces: adjacent_faces,
+        orthogonal_face_flags: orthogonal_face_flags,
+        all_faces_orthogonal: all_faces_orthogonal,
         vertices_of_face: mesh.vertices_of_face(fid),
+        edges_of_face: mesh.edges_of_face(fid), // Note: retrieving edges twice (also for vertices_of_face)
     })
 }
 
@@ -471,15 +464,110 @@ fn make_push_pull_workspace(
 fn pull_face(mesh: &mut Mesh, fid: FaceId, offset: f64) -> Result<(), String> {
     assert!(offset > 0.0);
 
-    let wsp = make_push_pull_workspace(mesh, fid, offset)?;
+    let wsp = make_push_pull_workspace(mesh, fid)?;
 
-    // Temporary constraint
-    assert!(wsp.other_faces.is_empty());
-
-    // With orthogonal faces simply move the vertices.
     let vertex_offset = wsp.face_normal.into_inner() * offset;
-    for &vid in &wsp.vertices_of_face {
-        mesh.vertices[vid].position += vertex_offset;
+    if wsp.all_faces_orthogonal {
+        // Move the vertices.
+        for &vid in &wsp.vertices_of_face {
+            mesh.vertices[vid].position += vertex_offset;
+        }
+    } else {
+        let n = wsp.edges_of_face.len();
+        assert_eq!(n, wsp.adjacent_faces.len());
+
+        // Recreate the oriented edges and edges of the pulled face with new vertices.
+        let first_pulled_vertex_id = VertexId::new(mesh.vertices.len());
+        for i in 0..n {
+            let pulled_position = mesh.vertices[wsp.vertices_of_face[i]].position + vertex_offset;
+            mesh.vertices.push(Vertex {
+                position: pulled_position,
+            });
+        }
+        // Add the new edges of the pulled face.
+        let first_pulled_oedge_id = OrientedEdgeId::new(mesh.oriented_edges.len());
+        let first_pulled_edge_id = EdgeId::new(mesh.edges.len());
+        for i in 0..n {
+            let v0 = VertexId::new(first_pulled_vertex_id.index() + i);
+            let v1 = VertexId::new(first_pulled_vertex_id.index() + (i + 1) % n);
+            mesh.edges.push(Edge {
+                vertices: [v0, v1],
+                oriented_edges: [
+                    OrientedEdgeId::new(first_pulled_oedge_id.index() + i),
+                    OrientedEdgeId::INVALID,
+                ],
+            });
+            mesh.oriented_edges.push(OrientedEdge {
+                edge: EdgeId::new(first_pulled_edge_id.index() + i),
+                forward: true,
+                face: fid,
+            });
+        }
+        // Add the skirt edges
+        let first_skirt_edge_id = EdgeId::new(mesh.edges.len());
+        for i in 0..n {
+            // Skirt edges go top to bottom.
+            mesh.edges.push(Edge {
+                vertices: [
+                    VertexId::new(first_pulled_vertex_id.index() + i),
+                    wsp.vertices_of_face[i],
+                ],
+                oriented_edges: [OrientedEdgeId::INVALID, OrientedEdgeId::INVALID],
+            });
+        }
+        // Add the skirt faces.
+        let first_skirt_face_id = FaceId::new(mesh.faces.len());
+        let face = &mut mesh.faces[fid];
+        for i in 0..n {
+            let skirt_face_id = FaceId::new(first_skirt_face_id.index() + i);
+            let first_oedge_id = mesh.oriented_edges.len();
+            let oriented_edges: Vec<OrientedEdgeId> = (first_oedge_id..first_oedge_id + 4)
+                .map(OrientedEdgeId::new)
+                .collect();
+            // Top edge
+            let top_edge_id = EdgeId::new(first_pulled_edge_id.index() + i);
+            mesh.oriented_edges.push(OrientedEdge {
+                edge: top_edge_id,
+                forward: false,
+                face: skirt_face_id,
+            });
+            mesh.edges[top_edge_id].oriented_edges[1] = oriented_edges[0];
+            // Skirt edge from top to bottom.
+            let downwards_skirt_edge_id = EdgeId::new(first_skirt_edge_id.index() + i);
+            mesh.oriented_edges.push(OrientedEdge {
+                edge: downwards_skirt_edge_id,
+                forward: true,
+                face: skirt_face_id,
+            });
+            mesh.edges[downwards_skirt_edge_id].oriented_edges[0] = oriented_edges[1];
+            // Bottom edge, the original moved face edge.
+            let bottom_edge_id = wsp.edges_of_face[i];
+            let bottom_edge = &mesh.edges[bottom_edge_id];
+            let old_face_oedge_id = face.oriented_edges[i];
+            // face.oriented_edges[i] can now be updated to new value
+            face.oriented_edges[i] = OrientedEdgeId::new(first_pulled_oedge_id.index() + i);
+            // Determine the direction.
+            let forward = if bottom_edge.oriented_edges[0] == old_face_oedge_id {
+                true
+            } else {
+                assert_eq!(bottom_edge.oriented_edges[1], old_face_oedge_id);
+                false
+            };
+            mesh.oriented_edges.push(OrientedEdge {
+                edge: bottom_edge_id,
+                forward,
+                face: skirt_face_id,
+            });
+            mesh.edges[bottom_edge_id].oriented_edges[!forward as usize] = oriented_edges[2];
+            // Skirt edge from bottom to top.
+            let upwards_skirt_edge_id = EdgeId::new(first_skirt_edge_id.index() + (i + 1) % n);
+            mesh.oriented_edges.push(OrientedEdge {
+                edge: upwards_skirt_edge_id,
+                forward: false,
+                face: skirt_face_id,
+            });
+            mesh.edges[upwards_skirt_edge_id].oriented_edges[1] = oriented_edges[3];
+        }
     }
 
     Ok(())
@@ -490,16 +578,16 @@ fn pull_face(mesh: &mut Mesh, fid: FaceId, offset: f64) -> Result<(), String> {
 fn push_face(mesh: &mut Mesh, fid: FaceId, offset: f64) -> Result<(), String> {
     assert!(offset < 0.0);
 
-    let wsp = make_push_pull_workspace(mesh, fid, offset)?;
+    let wsp = make_push_pull_workspace(mesh, fid)?;
 
-    let farthest_offset = if wsp.other_faces.is_empty() {
+    let farthest_offset = if wsp.all_faces_orthogonal {
         // Take all the edges of the adjacent, orthogonal faces. Filter for those whose faces are not both orthogonal, adjacent faces.
         // We achieve this by adding the edge on the first encounter and remove on the second.
         // First add the edges of the moved face.
         let mut farthest_offset_edges: HashSet<EdgeId> = HashSet::new();
-        farthest_offset_edges.extend(mesh.edges_of_face(fid));
+        farthest_offset_edges.extend(wsp.edges_of_face);
         // Then add all the edges of the orthogonal faces.
-        for ofid in &wsp.orthogonal_faces {
+        for ofid in &wsp.adjacent_faces {
             for eid in mesh.edges_of_face(*ofid) {
                 if !farthest_offset_edges.insert(eid) {
                     farthest_offset_edges.remove(&eid);
@@ -564,64 +652,70 @@ pub fn push_pull_face(mesh: &mut Mesh, fid: FaceId, offset: f64) -> Result<(), S
 mod tests {
     use super::*;
     use crate::primitives::make_cube;
+    // Rotate the vector such that the minimum element is at [0].
+    fn rotate<T: Ord>(mut v: Vec<T>) -> Vec<T> {
+        if v.is_empty() {
+            return v;
+        }
+        let min_pos = v.iter().enumerate().min_by_key(|(_, x)| *x).unwrap().0;
+        v.rotate_left(min_pos);
+        v
+    }
+
     #[test]
     fn adjacent_faces_of_cube() {
         let m = make_cube();
         assert_eq!(
-            m.adjacent_faces(FaceId::new(2)),
+            rotate(m.adjacent_faces(FaceId::new(2))),
             vec![
                 FaceId::new(0),
+                FaceId::new(5),
                 FaceId::new(1),
+                FaceId::new(4)
+            ]
+        );
+        assert_eq!(
+            rotate(m.adjacent_faces(FaceId::new(3))),
+            vec![
+                FaceId::new(0),
                 FaceId::new(4),
+                FaceId::new(1),
                 FaceId::new(5)
             ]
         );
         assert_eq!(
-            m.adjacent_faces(FaceId::new(3)),
-            vec![
-                FaceId::new(0),
-                FaceId::new(1),
-                FaceId::new(4),
-                FaceId::new(5)
-            ]
-        );
-        assert_eq!(
-            m.adjacent_faces(FaceId::new(1)),
+            rotate(m.adjacent_faces(FaceId::new(1))),
             vec![
                 FaceId::new(2),
+                FaceId::new(5),
                 FaceId::new(3),
-                FaceId::new(4),
-                FaceId::new(5)
+                FaceId::new(4)
             ]
         );
     }
     #[test]
     fn vertices_of_face() {
         let m = make_cube();
-        let mut vertices = m.vertices_of_face(FaceId::new(2));
-        vertices.sort_unstable();
         assert_eq!(
-            vertices,
+            rotate(m.vertices_of_face(FaceId::new(2))),
             vec![
                 VertexId::new(0),
                 VertexId::new(1),
-                VertexId::new(4),
-                VertexId::new(5)
+                VertexId::new(5),
+                VertexId::new(4)
             ]
         );
     }
     #[test]
     fn edges_of_face() {
         let m = make_cube();
-        let mut edges = m.edges_of_face(FaceId::new(2));
-        edges.sort_unstable();
         assert_eq!(
-            edges,
+            rotate(m.edges_of_face(FaceId::new(2))),
             vec![
                 EdgeId::new(0),
+                EdgeId::new(9),
                 EdgeId::new(4),
-                EdgeId::new(8),
-                EdgeId::new(9)
+                EdgeId::new(8)
             ]
         );
     }
