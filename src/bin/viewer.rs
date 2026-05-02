@@ -6,7 +6,9 @@ use kiss3d::egui;
 use kiss3d::event::{Action, MouseButton, WindowEvent};
 use kiss3d::prelude::*;
 
-use brep::{Edge, FaceId, Mesh, OrientedEdge, compute_face_normal, make_cube, push_pull_face};
+use brep::{
+    Edge, FaceId, Mesh, OrientedEdge, compute_face_normal, make_cube, make_ramp, push_pull_face,
+};
 
 #[derive(PartialEq, Eq)]
 enum Tool {
@@ -482,27 +484,59 @@ async fn main() {
             });
 
             egui::Window::new("Primitives").show(ctx, |ui| {
-                if ui.button("cube").clicked() {
-                    if let Some(mut n) = current_main.take() {
-                        n.remove();
-                    }
-                    if let Some(mut n) = current_sel.take() {
-                        n.remove();
-                    }
-                    selected_face = None;
-                    rotation = Quat::IDENTITY;
+                ui.horizontal(|ui| {
+                    let load = |m: Mesh,
+                                scene: &mut SceneNode3d,
+                                current_main: &mut Option<SceneNode3d>,
+                                current_sel: &mut Option<SceneNode3d>,
+                                centroid: &mut Vec3,
+                                mesh: &mut Option<Mesh>,
+                                selected_face: &mut Option<FaceId>,
+                                rotation: &mut Quat| {
+                        if let Some(mut n) = current_main.take() {
+                            n.remove();
+                        }
+                        if let Some(mut n) = current_sel.take() {
+                            n.remove();
+                        }
+                        *selected_face = None;
+                        *rotation = Quat::IDENTITY;
+                        *centroid = compute_centroid(&m);
+                        let gpu = build_gpu_mesh(&m, *centroid, |_| true);
+                        *current_main = Some(spawn_node(
+                            scene,
+                            gpu,
+                            Color::new(0.6, 0.8, 1.0, 1.0),
+                            Quat::IDENTITY,
+                        ));
+                        *mesh = Some(m);
+                    };
 
-                    let cube = make_cube();
-                    centroid = compute_centroid(&cube);
-                    let gpu = build_gpu_mesh(&cube, centroid, |_| true);
-                    current_main = Some(spawn_node(
-                        &mut scene,
-                        gpu,
-                        Color::new(0.6, 0.8, 1.0, 1.0),
-                        Quat::IDENTITY,
-                    ));
-                    mesh = Some(cube);
-                }
+                    if ui.button("cube").clicked() {
+                        load(
+                            make_cube(),
+                            &mut scene,
+                            &mut current_main,
+                            &mut current_sel,
+                            &mut centroid,
+                            &mut mesh,
+                            &mut selected_face,
+                            &mut rotation,
+                        );
+                    }
+                    if ui.button("ramp").clicked() {
+                        load(
+                            make_ramp(),
+                            &mut scene,
+                            &mut current_main,
+                            &mut current_sel,
+                            &mut centroid,
+                            &mut mesh,
+                            &mut selected_face,
+                            &mut rotation,
+                        );
+                    }
+                });
             });
         });
     }

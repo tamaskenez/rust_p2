@@ -2,7 +2,7 @@ pub mod step;
 pub use step::{StepError, load_step};
 
 pub mod primitives;
-pub use primitives::make_cube;
+pub use primitives::{make_cube, make_ramp};
 
 use nalgebra::Point3;
 use nalgebra::Unit;
