@@ -517,7 +517,6 @@ fn pull_face(mesh: &mut Mesh, fid: FaceId, offset: f64) -> Result<(), String> {
         }
         // Add the skirt faces.
         let first_skirt_face_id = FaceId::new(mesh.faces.len());
-        let face = &mut mesh.faces[fid];
         for i in 0..n {
             let skirt_face_id = FaceId::new(first_skirt_face_id.index() + i);
             let first_oedge_id = mesh.oriented_edges.len();
@@ -543,9 +542,10 @@ fn pull_face(mesh: &mut Mesh, fid: FaceId, offset: f64) -> Result<(), String> {
             // Bottom edge, the original moved face edge.
             let bottom_edge_id = wsp.edges_of_face[i];
             let bottom_edge = &mesh.edges[bottom_edge_id];
-            let old_face_oedge_id = face.oriented_edges[i];
+            let face_oedge_id_ref = &mut mesh.faces[fid].oriented_edges[i];
+            let old_face_oedge_id = *face_oedge_id_ref;
             // face.oriented_edges[i] can now be updated to new value
-            face.oriented_edges[i] = OrientedEdgeId::new(first_pulled_oedge_id.index() + i);
+            *face_oedge_id_ref = OrientedEdgeId::new(first_pulled_oedge_id.index() + i);
             // Determine the direction.
             let forward = if bottom_edge.oriented_edges[0] == old_face_oedge_id {
                 true
@@ -567,6 +567,10 @@ fn pull_face(mesh: &mut Mesh, fid: FaceId, offset: f64) -> Result<(), String> {
                 face: skirt_face_id,
             });
             mesh.edges[upwards_skirt_edge_id].oriented_edges[1] = oriented_edges[3];
+            mesh.faces.push(Face {
+                oriented_edges,
+                normal: None,
+            });
         }
     }
 
