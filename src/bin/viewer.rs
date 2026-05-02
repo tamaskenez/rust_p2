@@ -170,6 +170,7 @@ fn rebuild_scene(
     scene: &mut SceneNode3d,
     main_node: &mut Option<SceneNode3d>,
     sel_node: &mut Option<SceneNode3d>,
+    vert_node: &mut Option<SceneNode3d>,
     mesh: &Mesh,
     centroid: Vec3,
     selected_face: Option<FaceId>,
@@ -179,6 +180,9 @@ fn rebuild_scene(
         n.remove();
     }
     if let Some(mut n) = sel_node.take() {
+        n.remove();
+    }
+    if let Some(mut n) = vert_node.take() {
         n.remove();
     }
 
@@ -197,6 +201,18 @@ fn rebuild_scene(
             rotation,
         ));
     }
+
+    let mut group = scene.add_group();
+    group.set_position(Vec3::new(0.0, 0.0, OBJECT_Z));
+    group.set_rotation(rotation);
+    for v in &mesh.vertices {
+        let p = v.position;
+        let local = Vec3::new(p.x as f32, p.y as f32, p.z as f32) - centroid;
+        let mut s = group.add_sphere(0.03);
+        s.set_position(local);
+        s.set_color(Color::new(1.0, 0.5, 0.0, 1.0));
+    }
+    *vert_node = Some(group);
 }
 
 fn ray_triangle_intersect(ro: Vec3, rd: Vec3, v0: Vec3, v1: Vec3, v2: Vec3) -> Option<f32> {
@@ -276,6 +292,7 @@ async fn main() {
 
     let mut current_main: Option<SceneNode3d> = None;
     let mut current_sel: Option<SceneNode3d> = None;
+    let mut current_verts: Option<SceneNode3d> = None;
     let mut mesh: Option<Mesh> = None;
     let mut centroid = Vec3::ZERO;
     let mut rotation = Quat::IDENTITY;
@@ -304,7 +321,9 @@ async fn main() {
                                     let dy = (y - ly) as f32 * 0.01;
                                     let qy = Quat::from_axis_angle(Vec3::Y, dx);
                                     let qx = Quat::from_axis_angle(Vec3::X, dy);
-                                    for opt in [&mut current_main, &mut current_sel] {
+                                    for opt in
+                                        [&mut current_main, &mut current_sel, &mut current_verts]
+                                    {
                                         if let Some(node) = opt {
                                             node.rotate(qy);
                                             node.rotate(qx);
@@ -330,6 +349,7 @@ async fn main() {
                                             &mut scene,
                                             &mut current_main,
                                             &mut current_sel,
+                                            &mut current_verts,
                                             m,
                                             centroid,
                                             selected_face,
@@ -364,6 +384,7 @@ async fn main() {
                                             &mut scene,
                                             &mut current_main,
                                             &mut current_sel,
+                                            &mut current_verts,
                                             m,
                                             centroid,
                                             selected_face,
@@ -411,6 +432,7 @@ async fn main() {
                                                 &mut scene,
                                                 &mut current_main,
                                                 &mut current_sel,
+                                                &mut current_verts,
                                                 m,
                                                 centroid,
                                                 selected_face,
@@ -435,6 +457,7 @@ async fn main() {
                                             &mut scene,
                                             &mut current_main,
                                             &mut current_sel,
+                                            &mut current_verts,
                                             m,
                                             centroid,
                                             selected_face,
@@ -459,6 +482,7 @@ async fn main() {
                                                 &mut scene,
                                                 &mut current_main,
                                                 &mut current_sel,
+                                                &mut current_verts,
                                                 m,
                                                 centroid,
                                                 selected_face,
@@ -489,26 +513,24 @@ async fn main() {
                                 scene: &mut SceneNode3d,
                                 current_main: &mut Option<SceneNode3d>,
                                 current_sel: &mut Option<SceneNode3d>,
+                                current_verts: &mut Option<SceneNode3d>,
                                 centroid: &mut Vec3,
                                 mesh: &mut Option<Mesh>,
                                 selected_face: &mut Option<FaceId>,
                                 rotation: &mut Quat| {
-                        if let Some(mut n) = current_main.take() {
-                            n.remove();
-                        }
-                        if let Some(mut n) = current_sel.take() {
-                            n.remove();
-                        }
                         *selected_face = None;
                         *rotation = Quat::IDENTITY;
                         *centroid = compute_centroid(&m);
-                        let gpu = build_gpu_mesh(&m, *centroid, |_| true);
-                        *current_main = Some(spawn_node(
+                        rebuild_scene(
                             scene,
-                            gpu,
-                            Color::new(0.6, 0.8, 1.0, 1.0),
+                            current_main,
+                            current_sel,
+                            current_verts,
+                            &m,
+                            *centroid,
+                            None,
                             Quat::IDENTITY,
-                        ));
+                        );
                         *mesh = Some(m);
                     };
 
@@ -518,6 +540,7 @@ async fn main() {
                             &mut scene,
                             &mut current_main,
                             &mut current_sel,
+                            &mut current_verts,
                             &mut centroid,
                             &mut mesh,
                             &mut selected_face,
@@ -530,6 +553,7 @@ async fn main() {
                             &mut scene,
                             &mut current_main,
                             &mut current_sel,
+                            &mut current_verts,
                             &mut centroid,
                             &mut mesh,
                             &mut selected_face,
