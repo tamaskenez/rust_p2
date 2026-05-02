@@ -8,6 +8,8 @@ use nalgebra::Point3;
 use nalgebra::Unit;
 use nalgebra::Vector3;
 
+use std::collections::HashSet;
+
 pub const EPS_LENGTH_USER: f64 = 0.01;
 pub const EPS_LENGTH_SYSTEM: f64 = 1e-12;
 pub const EPS_ANGLE_USER: f64 = 0.05 * (std::f64::consts::PI / 180.0);
@@ -129,6 +131,13 @@ impl Mesh {
         faces.sort_unstable();
         faces.dedup();
         faces
+    }
+    pub fn edges_of_face(&self, fid: FaceId) -> Vec<EdgeId> {
+        self.faces[fid]
+            .oriented_edges
+            .iter()
+            .map(|&oeid| self.oriented_edges[oeid].edge)
+            .collect()
     }
     pub fn vertices_of_face(&self, fid: FaceId) -> Vec<VertexId> {
         self.faces[fid]
@@ -417,13 +426,19 @@ pub fn compute_face_normal(mesh: &Mesh, face_id: FaceId) -> Option<Unit<Vector3<
     Unit::try_new(normal, EPS_LENGTH_SYSTEM)
 }
 
-// Moves the face outwards with `offset` which must be nonnegative.
-// For now only works if all adjacent faces are orthogonal to the moved face.
-pub fn pull_face(mesh: &mut Mesh, fid: FaceId, offset: f64) -> Result<(), String> {
-    if offset == 0.0 {
-        return Ok(());
-    }
-    assert!(offset > 0.0);
+struct PushPullWorkspace {
+    pub face_normal: Unit<Vector3<f64>>,
+    pub orthogonal_faces: Vec<FaceId>,
+    pub other_faces: Vec<FaceId>,
+    pub vertices_of_face: Vec<VertexId>,
+}
+
+fn make_push_pull_workspace(
+    mesh: &mut Mesh,
+    fid: FaceId,
+    offset: f64,
+) -> Result<PushPullWorkspace, String> {
+    let mut wsp: PushPullWorkspace;
 
     let face_normal = mesh
         .face_normal(fid)
@@ -443,33 +458,108 @@ pub fn pull_face(mesh: &mut Mesh, fid: FaceId, offset: f64) -> Result<(), String
         }
     }
 
+    Ok(PushPullWorkspace {
+        face_normal: face_normal,
+        orthogonal_faces: orthogonal_faces,
+        other_faces: other_faces,
+        vertices_of_face: mesh.vertices_of_face(fid),
+    })
+}
+
+// Moves the face outwards with `offset` which must be positive.
+// For now only works if all adjacent faces are orthogonal to the moved face.
+fn pull_face(mesh: &mut Mesh, fid: FaceId, offset: f64) -> Result<(), String> {
+    assert!(offset > 0.0);
+
+    let wsp = make_push_pull_workspace(mesh, fid, offset)?;
+
     // Temporary constraint
-    assert!(other_faces.is_empty());
+    assert!(wsp.other_faces.is_empty());
+
     // With orthogonal faces simply move the vertices.
-    let vertices = mesh.vertices_of_face(fid);
-    let vertex_offset = face_normal.into_inner() * offset;
-    for &vid in &vertices {
+    let vertex_offset = wsp.face_normal.into_inner() * offset;
+    for &vid in &wsp.vertices_of_face {
         mesh.vertices[vid].position += vertex_offset;
     }
 
     Ok(())
 }
 
-pub fn push_face(mesh: &mut Mesh, fid: FaceId, offset: f64) -> Result<(), String> {
-    if offset == 0.0 {
-        return Ok(());
-    }
+// Moves the face inwards with `-offset` which must be negative.
+// Rejects if the moved faces has non-orthogonal adjacent faces.
+fn push_face(mesh: &mut Mesh, fid: FaceId, offset: f64) -> Result<(), String> {
     assert!(offset < 0.0);
+
+    let wsp = make_push_pull_workspace(mesh, fid, offset)?;
+
+    let farthest_offset = if wsp.other_faces.is_empty() {
+        // Take all the edges of the adjacent, orthogonal faces. Filter for those whose faces are not both orthogonal, adjacent faces.
+        // We achieve this by adding the edge on the first encounter and remove on the second.
+        // First add the edges of the moved face.
+        let mut farthest_offset_edges: HashSet<EdgeId> = HashSet::new();
+        farthest_offset_edges.extend(mesh.edges_of_face(fid));
+        // Then add all the edges of the orthogonal faces.
+        for ofid in &wsp.orthogonal_faces {
+            for eid in mesh.edges_of_face(*ofid) {
+                if !farthest_offset_edges.insert(eid) {
+                    farthest_offset_edges.remove(&eid);
+                }
+            }
+        }
+        // Collect vertices.
+        let mut farthest_offset_vertices: HashSet<VertexId> = HashSet::new();
+        for eid in farthest_offset_edges {
+            farthest_offset_vertices.extend(&mesh.edges[eid].vertices);
+        }
+
+        // Find the vertex of the moved face that is most in the push direction. Theoretically, all vertices should be equally far.
+        let mut lowest_vid = wsp.vertices_of_face[0];
+        for vid in &wsp.vertices_of_face {
+            if (mesh.vertices[*vid].position - mesh.vertices[lowest_vid].position)
+                .dot(&wsp.face_normal)
+                < 0.0
+            {
+                lowest_vid = *vid;
+            }
+        }
+
+        // Find the vertex nearest to the moved face. That vertex defines the maximum (negative) offset.
+        let lowest_position_in_face = mesh.vertices[lowest_vid].position;
+        let mut farthest_offset: f64 = -f64::INFINITY;
+        for vid in farthest_offset_vertices {
+            farthest_offset = farthest_offset
+                .max((mesh.vertices[vid].position - lowest_position_in_face).dot(&wsp.face_normal));
+        }
+        farthest_offset
+    } else {
+        0.0
+    };
+
+    if offset < farthest_offset {
+        return Err(format!(
+            "Offset {} is too far for face {}",
+            offset,
+            fid.index()
+        ));
+    }
+
+    let vertex_offset = wsp.face_normal.into_inner() * offset;
+    for &vid in &wsp.vertices_of_face {
+        mesh.vertices[vid].position += vertex_offset;
+    }
+
     Ok(())
 }
 
 pub fn push_pull_face(mesh: &mut Mesh, fid: FaceId, offset: f64) -> Result<(), String> {
     if offset < 0.0 {
-        push_face(mesh, fid, offset)
-    } else {
-        pull_face(mesh, fid, offset)
+        return push_face(mesh, fid, offset);
+    } else if offset > 0.0 {
+        return pull_face(mesh, fid, offset);
     }
+    Ok(())
 }
+
 #[cfg(test)]
 mod tests {
     use super::*;
