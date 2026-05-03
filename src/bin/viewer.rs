@@ -130,6 +130,39 @@ fn face_normal_screen(
     if len < 1e-7 { Vec2::X } else { dir / len }
 }
 
+fn triangulate_face(face_verts: &[Vec3], normal: Option<Vec3>) -> Vec<u32> {
+    let n = face_verts.len();
+    if n < 3 {
+        return Vec::new();
+    }
+    if let Some(normal) = normal {
+        // Build an orthonormal 2D basis (u, v) on the face plane such that
+        // {u, v, normal} is right-handed. CCW input (viewed from +normal) stays CCW in (u, v).
+        let helper = if normal.x.abs() < 0.9 {
+            Vec3::X
+        } else {
+            Vec3::Y
+        };
+        let u = normal.cross(helper).normalize();
+        let v = normal.cross(u);
+
+        let mut data: Vec<f64> = Vec::with_capacity(n * 2);
+        for p in face_verts {
+            data.push(p.dot(u) as f64);
+            data.push(p.dot(v) as f64);
+        }
+        if let Ok(tris) = earcutr::earcut(&data, &[], 2) {
+            return tris.into_iter().map(|i| i as u32).collect();
+        }
+    }
+    // Fan-triangulation fallback.
+    let mut out = Vec::with_capacity((n - 2) * 3);
+    for i in 1..n as u32 - 1 {
+        out.extend_from_slice(&[0, i, i + 1]);
+    }
+    out
+}
+
 fn build_gpu_mesh(mesh: &Mesh, centroid: Vec3, face_mask: impl Fn(usize) -> bool) -> GpuMesh3d {
     let mut vertices: Vec<Vec3> = Vec::new();
     let mut indices: Vec<[u32; 3]> = Vec::new();
@@ -137,15 +170,20 @@ fn build_gpu_mesh(mesh: &Mesh, centroid: Vec3, face_mask: impl Fn(usize) -> bool
         if !face_mask(face_idx) {
             continue;
         }
-        let base = vertices.len() as u32;
         let face_verts: Vec<Vec3> = face_gpu_verts(mesh, face_idx)
             .into_iter()
             .map(|v| v - centroid)
             .collect();
-        let n = face_verts.len() as u32;
+        if face_verts.len() < 3 {
+            continue;
+        }
+        let normal = compute_face_normal(mesh, FaceId::new(face_idx))
+            .map(|n| Vec3::new(n.x as f32, n.y as f32, n.z as f32));
+        let base = vertices.len() as u32;
+        let tris = triangulate_face(&face_verts, normal);
         vertices.extend(face_verts);
-        for i in 1..n - 1 {
-            indices.push([base, base + i, base + i + 1]);
+        for tri in tris.chunks_exact(3) {
+            indices.push([base + tri[0], base + tri[1], base + tri[2]]);
         }
     }
     GpuMesh3d::new(vertices, indices, None, None, false)
@@ -265,11 +303,19 @@ fn pick_face(
             .into_iter()
             .map(|v| v - centroid)
             .collect();
-        let n = verts.len();
-        for i in 1..n - 1 {
-            if let Some(t) =
-                ray_triangle_intersect(ro_local, rd_local, verts[0], verts[i], verts[i + 1])
-            {
+        if verts.len() < 3 {
+            continue;
+        }
+        let normal = compute_face_normal(mesh, FaceId::new(face_idx))
+            .map(|n| Vec3::new(n.x as f32, n.y as f32, n.z as f32));
+        let tris = triangulate_face(&verts, normal);
+        for tri in tris.chunks_exact(3) {
+            let (a, b, c) = (
+                verts[tri[0] as usize],
+                verts[tri[1] as usize],
+                verts[tri[2] as usize],
+            );
+            if let Some(t) = ray_triangle_intersect(ro_local, rd_local, a, b, c) {
                 if t < best_t {
                     best_t = t;
                     best_face = Some(FaceId::new(face_idx));

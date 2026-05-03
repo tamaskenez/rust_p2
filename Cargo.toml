@@ -9,3 +9,4 @@ crate-type = ["staticlib", "rlib"]
 [dependencies]
 nalgebra = "0.33"
 kiss3d = { version = "0.41", features = ["egui"] }
+earcutr = "0.4"
