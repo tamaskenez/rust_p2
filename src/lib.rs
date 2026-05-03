@@ -1,6 +1,3 @@
-pub mod step;
-pub use step::{StepError, load_step};
-
 pub mod primitives;
 pub use primitives::{make_cube, make_ramp};
 
@@ -280,7 +277,6 @@ pub fn validate_mesh(mesh: &Mesh) -> Result<(), Vec<String>> {
         }
     }
     for (i, &count) in counts.iter().enumerate() {
-        let oeid = OrientedEdgeId::new(i);
         match count {
             0 => errors.push(format!("oriented_edge {i}: not referenced by any face")),
             1 => {}
