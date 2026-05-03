@@ -33,6 +33,7 @@ impl VertexId {
 pub struct EdgeId(u32);
 
 impl EdgeId {
+    pub const INVALID: Self = Self(u32::MAX);
     pub fn new(idx: usize) -> Self {
         Self(idx as u32)
     }
@@ -99,6 +100,8 @@ pub struct Mesh {
     pub edges: Vec<Edge>,
     pub oriented_edges: Vec<OrientedEdge>,
     pub faces: Vec<Face>,
+    // Removed oriented edge slots are kept around.
+    pub removed_oriented_edges: Vec<OrientedEdgeId>,
 }
 
 impl Mesh {
@@ -144,6 +147,30 @@ impl Mesh {
                 self.edges[oe.edge].vertices[!oe.forward as usize] // Use the first vertex.
             })
             .collect()
+    }
+    pub fn allocate_oriented_edge(&mut self) -> OrientedEdgeId {
+        if let Some(id) = self.removed_oriented_edges.pop() {
+            return id;
+        }
+        let id = OrientedEdgeId::new(self.oriented_edges.len());
+        self.oriented_edges.push(OrientedEdge {
+            edge: EdgeId::INVALID,
+            forward: false,
+            face: FaceId::INVALID,
+        });
+        id
+    }
+    pub fn remove_oriented_edge(&mut self, oeid: OrientedEdgeId) {
+        if oeid.index() + 1 == self.oriented_edges.len() {
+            self.oriented_edges.pop();
+        } else {
+            self.oriented_edges[oeid] = OrientedEdge {
+                edge: EdgeId::INVALID,
+                forward: false,
+                face: FaceId::INVALID,
+            };
+            self.removed_oriented_edges.push(oeid);
+        }
     }
 }
 
@@ -203,6 +230,9 @@ pub fn validate_mesh(mesh: &Mesh) -> Result<(), Vec<String>> {
     let n_edges = mesh.edges.len();
     let n_verts = mesh.vertices.len();
 
+    let removed_oriented_edges: HashSet<OrientedEdgeId> =
+        mesh.removed_oriented_edges.iter().copied().collect();
+
     // Every edge must reference valid vertices and valid OE back-refs.
     for (i, edge) in mesh.edges.iter().enumerate() {
         for (slot, &vid) in edge.vertices.iter().enumerate() {
@@ -214,7 +244,7 @@ pub fn validate_mesh(mesh: &Mesh) -> Result<(), Vec<String>> {
             }
         }
         for (slot, &oe_id) in edge.oriented_edges.iter().enumerate() {
-            if oe_id.index() >= n_oes {
+            if oe_id.index() >= n_oes || removed_oriented_edges.contains(&oe_id) {
                 errors.push(format!(
                     "edge {i}: OE slot {slot} ref {} out of range (mesh has {n_oes} oriented edges)",
                     oe_id.index(),
@@ -242,6 +272,9 @@ pub fn validate_mesh(mesh: &Mesh) -> Result<(), Vec<String>> {
 
     // Every oriented edge must reference a valid edge and face.
     for (i, oe) in mesh.oriented_edges.iter().enumerate() {
+        if removed_oriented_edges.contains(&OrientedEdgeId::new(i)) {
+            continue;
+        }
         if oe.edge.index() >= n_edges {
             errors.push(format!(
                 "oriented_edge {i}: edge ref {} out of range (mesh has {n_edges} edges)",
@@ -268,7 +301,7 @@ pub fn validate_mesh(mesh: &Mesh) -> Result<(), Vec<String>> {
     let mut counts = vec![0u32; n_oes];
     for (fid, face) in mesh.faces.iter().enumerate() {
         for &oe_id in &face.oriented_edges {
-            if oe_id.index() < n_oes {
+            if oe_id.index() < n_oes && !removed_oriented_edges.contains(&oe_id) {
                 counts[oe_id.index()] += 1;
             } else {
                 errors.push(format!(
@@ -279,10 +312,19 @@ pub fn validate_mesh(mesh: &Mesh) -> Result<(), Vec<String>> {
         }
     }
     for (i, &count) in counts.iter().enumerate() {
-        match count {
-            1 => {}
-            0 => errors.push(format!("oriented_edge {i}: not referenced by any face")),
-            n => errors.push(format!("oriented_edge {i}: referenced by {n} face loops")),
+        let oeid = OrientedEdgeId::new(i);
+        if removed_oriented_edges.contains(&oeid) {
+            if count > 0 {
+                errors.push(format!(
+                    "oriented_edge {i}: it's removed, but referenced by {count} face loops"
+                ));
+            }
+        } else {
+            match count {
+                0 => errors.push(format!("oriented_edge {i}: not referenced by any face")),
+                1 => {}
+                n => errors.push(format!("oriented_edge {i}: referenced by {n} face loops")),
+            }
         }
     }
 
@@ -293,7 +335,11 @@ pub fn validate_mesh(mesh: &Mesh) -> Result<(), Vec<String>> {
         for j in 0..n {
             let oe_a_id = oes[j];
             let oe_b_id = oes[(j + 1) % n];
-            if oe_a_id.index() >= n_oes || oe_b_id.index() >= n_oes {
+            if oe_a_id.index() >= n_oes
+                || oe_b_id.index() >= n_oes
+                || removed_oriented_edges.contains(&oe_a_id)
+                || removed_oriented_edges.contains(&oe_b_id)
+            {
                 continue;
             }
             let oe_a = &mesh.oriented_edges[oe_a_id];
@@ -327,7 +373,11 @@ pub fn validate_mesh(mesh: &Mesh) -> Result<(), Vec<String>> {
     // Closed-manifold: each edge's two oriented edges must belong to different faces.
     for (i, edge) in mesh.edges.iter().enumerate() {
         let [oe0_id, oe1_id] = edge.oriented_edges;
-        if oe0_id.index() >= n_oes || oe1_id.index() >= n_oes {
+        if oe0_id.index() >= n_oes
+            || oe1_id.index() >= n_oes
+            || removed_oriented_edges.contains(&oe0_id)
+            || removed_oriented_edges.contains(&oe1_id)
+        {
             continue;
         }
         let face0 = mesh.oriented_edges[oe0_id].face;
@@ -351,7 +401,7 @@ pub fn validate_mesh(mesh: &Mesh) -> Result<(), Vec<String>> {
         }
         if let Some(stored) = &face.normal {
             let geometry_ok = face.oriented_edges.iter().all(|&oe_id| {
-                if oe_id.index() >= n_oes {
+                if oe_id.index() >= n_oes || removed_oriented_edges.contains(&oe_id) {
                     return false;
                 }
                 let oe = &mesh.oriented_edges[oe_id];
@@ -425,7 +475,7 @@ pub fn compute_face_normal(mesh: &Mesh, face_id: FaceId) -> Option<Unit<Vector3<
 struct PushPullWorkspace {
     pub face_normal: Unit<Vector3<f64>>,
     pub adjacent_faces: Vec<FaceId>,
-    pub orthogonal_face_flags: Vec<bool>,
+    pub orthogonal_faces_sorted: Vec<FaceId>,
     pub all_faces_orthogonal: bool,
     pub vertices_of_face: Vec<VertexId>,
     pub edges_of_face: Vec<EdgeId>,
@@ -436,23 +486,27 @@ fn make_push_pull_workspace(mesh: &mut Mesh, fid: FaceId) -> Result<PushPullWork
         .face_normal(fid)
         .ok_or_else(|| format!("Face normal computation failed for face {}", fid.index()))?;
 
-    // Enumerate adjacent faces and collect orthogonal and other faces.
+    // Enumerate adjacent faces and collect orthogonal faces.
     let adjacent_faces = mesh.adjacent_faces(fid);
-    let mut orthogonal_face_flags: Vec<bool> = Vec::with_capacity(adjacent_faces.len());
+    let mut orthogonal_faces_sorted: Vec<FaceId> = Vec::new();
     let mut all_faces_orthogonal = true;
     for &afid in &adjacent_faces {
         let adjacent_face_normal = mesh
             .face_normal(afid)
             .ok_or_else(|| format!("Face normal computation failed for face {}", afid.index()))?;
-        let b = adjacent_face_normal.dot(face_normal.as_ref()).abs() < MAX_ORTHOGONAL_COS_ANGLE;
-        all_faces_orthogonal &= b;
-        orthogonal_face_flags.push(b);
+        if adjacent_face_normal.dot(face_normal.as_ref()).abs() < MAX_ORTHOGONAL_COS_ANGLE {
+            orthogonal_faces_sorted.push(afid);
+        } else {
+            all_faces_orthogonal = false;
+        }
     }
+
+    orthogonal_faces_sorted.sort_unstable();
 
     Ok(PushPullWorkspace {
         face_normal: face_normal,
         adjacent_faces: adjacent_faces,
-        orthogonal_face_flags: orthogonal_face_flags,
+        orthogonal_faces_sorted,
         all_faces_orthogonal: all_faces_orthogonal,
         vertices_of_face: mesh.vertices_of_face(fid),
         edges_of_face: mesh.edges_of_face(fid), // Note: retrieving edges twice (also for vertices_of_face)
@@ -473,6 +527,12 @@ fn pull_face(mesh: &mut Mesh, fid: FaceId, offset: f64) -> Result<(), String> {
             mesh.vertices[vid].position += vertex_offset;
         }
     } else {
+        if let Err(errors) = validate_mesh(mesh) {
+            for e in &errors {
+                println!("{e}");
+            }
+        }
+
         let n = wsp.edges_of_face.len();
         assert_eq!(n, wsp.adjacent_faces.len());
 
@@ -485,23 +545,18 @@ fn pull_face(mesh: &mut Mesh, fid: FaceId, offset: f64) -> Result<(), String> {
             });
         }
         // Add the new edges of the pulled face.
-        let first_pulled_oedge_id = OrientedEdgeId::new(mesh.oriented_edges.len());
         let first_pulled_edge_id = EdgeId::new(mesh.edges.len());
         for i in 0..n {
             let v0 = VertexId::new(first_pulled_vertex_id.index() + i);
             let v1 = VertexId::new(first_pulled_vertex_id.index() + (i + 1) % n);
+            let oeid = mesh.faces[fid].oriented_edges[i];
             mesh.edges.push(Edge {
                 vertices: [v0, v1],
-                oriented_edges: [
-                    OrientedEdgeId::new(first_pulled_oedge_id.index() + i),
-                    OrientedEdgeId::INVALID,
-                ],
+                oriented_edges: [oeid, OrientedEdgeId::INVALID],
             });
-            mesh.oriented_edges.push(OrientedEdge {
-                edge: EdgeId::new(first_pulled_edge_id.index() + i),
-                forward: true,
-                face: fid,
-            });
+            let oriented_edge = &mut mesh.oriented_edges[oeid];
+            oriented_edge.edge = EdgeId::new(first_pulled_edge_id.index() + i);
+            oriented_edge.forward = true;
         }
         // Add the skirt edges
         let first_skirt_edge_id = EdgeId::new(mesh.edges.len());
@@ -517,6 +572,7 @@ fn pull_face(mesh: &mut Mesh, fid: FaceId, offset: f64) -> Result<(), String> {
         }
         // Add the skirt faces.
         let first_skirt_face_id = FaceId::new(mesh.faces.len());
+        let mut orthogonal_face_and_skirt_face_edge_vec: Vec<(FaceId, FaceId, EdgeId)> = Vec::new();
         for i in 0..n {
             let skirt_face_id = FaceId::new(first_skirt_face_id.index() + i);
             let first_oedge_id = mesh.oriented_edges.len();
@@ -542,23 +598,36 @@ fn pull_face(mesh: &mut Mesh, fid: FaceId, offset: f64) -> Result<(), String> {
             // Bottom edge, the original moved face edge.
             let bottom_edge_id = wsp.edges_of_face[i];
             let bottom_edge = &mesh.edges[bottom_edge_id];
-            let face_oedge_id_ref = &mut mesh.faces[fid].oriented_edges[i];
-            let old_face_oedge_id = *face_oedge_id_ref;
-            // face.oriented_edges[i] can now be updated to new value
-            *face_oedge_id_ref = OrientedEdgeId::new(first_pulled_oedge_id.index() + i);
-            // Determine the direction.
-            let forward = if bottom_edge.oriented_edges[0] == old_face_oedge_id {
+            let face_oedge_id = mesh.faces[fid].oriented_edges[i];
+            // Determine the direction, the orientation of the original oriented face edge.
+            let forward = if bottom_edge.oriented_edges[0] == face_oedge_id {
                 true
             } else {
-                assert_eq!(bottom_edge.oriented_edges[1], old_face_oedge_id);
+                assert_eq!(bottom_edge.oriented_edges[1], face_oedge_id);
                 false
             };
+            // The new bottom oriented edge will have the same orientation.
             mesh.oriented_edges.push(OrientedEdge {
                 edge: bottom_edge_id,
                 forward,
                 face: skirt_face_id,
             });
-            mesh.edges[bottom_edge_id].oriented_edges[!forward as usize] = oriented_edges[2];
+            let bottom_edge_oes = &mut mesh.edges[bottom_edge_id].oriented_edges;
+            bottom_edge_oes[!forward as usize] = oriented_edges[2];
+            let face_across_bottom_edge =
+                mesh.oriented_edges[bottom_edge_oes[forward as usize]].face;
+            // Store information if this is an orthogonal face which later needs to be merged with the skirt.
+            if wsp
+                .orthogonal_faces_sorted
+                .binary_search(&face_across_bottom_edge)
+                .is_ok()
+            {
+                orthogonal_face_and_skirt_face_edge_vec.push((
+                    face_across_bottom_edge,
+                    skirt_face_id,
+                    bottom_edge_id,
+                ));
+            }
             // Skirt edge from bottom to top.
             let upwards_skirt_edge_id = EdgeId::new(first_skirt_edge_id.index() + (i + 1) % n);
             mesh.oriented_edges.push(OrientedEdge {
@@ -571,6 +640,102 @@ fn pull_face(mesh: &mut Mesh, fid: FaceId, offset: f64) -> Result<(), String> {
                 oriented_edges,
                 normal: None,
             });
+        }
+        // Print errors if mesh is invalid.
+        if let Err(errors) = validate_mesh(mesh) {
+            for e in &errors {
+                println!("{e}");
+            }
+        }
+        // Merge coplanar skirt faces into original orthogonal faces.
+        let mut removed_edges: Vec<EdgeId> = Vec::new();
+        let mut removed_oedges: Vec<OrientedEdgeId> = Vec::new();
+        let mut removed_faces: Vec<FaceId> = Vec::new();
+        for (ofid, skirtid, common_eid) in orthogonal_face_and_skirt_face_edge_vec {
+            // Find the common edge's oriented edge in the orthogonal face.
+            let common_edge_oes = &mesh.edges[common_eid].oriented_edges;
+            removed_oedges.extend(common_edge_oes);
+            removed_edges.push(common_eid);
+            let f0 = mesh.oriented_edges[common_edge_oes[0]].face;
+            let f1 = mesh.oriented_edges[common_edge_oes[1]].face;
+            // Find which oriented edge id belongs to the orthogonal and skirt faces.
+            let face_and_skirt_oe = if f0 == ofid {
+                assert_eq!(f1, skirtid);
+                (common_edge_oes[0], common_edge_oes[1])
+            } else {
+                assert_eq!(f0, skirtid);
+                assert_eq!(f1, ofid);
+                (common_edge_oes[1], common_edge_oes[0])
+            };
+            // Find face_and_skirt_oe.0 in the orthogonal face.
+            let face_ofid = &mut mesh.faces[ofid];
+            let pos_in_ofid = face_ofid
+                .oriented_edges
+                .iter()
+                .position(|&oe| oe == face_and_skirt_oe.0)
+                .unwrap(); // mesh validity ensures Some.
+            // Rotate the oriented edges such that it ends with item at position.
+            let num_oes = face_ofid.oriented_edges.len();
+            face_ofid
+                .oriented_edges
+                .rotate_right(num_oes - pos_in_ofid - 1);
+            // Remove common edge.
+            assert_eq!(
+                *face_ofid.oriented_edges.last().unwrap(),
+                face_and_skirt_oe.0
+            );
+            face_ofid.oriented_edges.pop();
+            // Continue these oriented edges with the skirt's oriented edges, starting from just
+            // after face_and_skirt_oe.1 and stopping before it.
+            let face_skirtid = &mut mesh.faces[skirtid];
+            let pos_in_skirt = face_skirtid
+                .oriented_edges
+                .iter()
+                .position(|&oe| oe == face_and_skirt_oe.1)
+                .unwrap(); // mesh validity ensures Some.
+            let num_skirt_edges = face_skirtid.oriented_edges.len();
+            let mut oedges_to_copy: Vec<OrientedEdgeId> = Vec::with_capacity(num_skirt_edges - 1);
+            for i in 1..num_skirt_edges {
+                let oeid = mesh.faces[skirtid].oriented_edges[(pos_in_skirt + i) % num_skirt_edges];
+                mesh.oriented_edges[oeid].face = ofid;
+                oedges_to_copy.push(oeid);
+            }
+            mesh.faces[ofid].oriented_edges.extend(oedges_to_copy);
+            removed_faces.push(skirtid);
+        }
+        // Oriented edge slots are reused because swap_remove would reassign an oriented edge and
+        // it should have been updated in its face, which is a costly search.
+        for oeid in removed_oedges {
+            mesh.remove_oriented_edge(oeid);
+        }
+
+        removed_edges.sort_unstable_by(|a, b| b.cmp(a));
+        for eid in removed_edges {
+            mesh.edges.swap_remove(eid.index());
+            // swap_remove reassigns index `mesh.edges.len() - 1` to eid
+            // It's referenced in its oriented edges, update those.
+            if eid.index() != mesh.edges.len() {
+                for i in [0, 1] {
+                    mesh.oriented_edges[mesh.edges[eid].oriented_edges[i]].edge = eid;
+                }
+            }
+        }
+
+        removed_faces.sort_unstable_by(|a, b| b.cmp(a));
+        for fid in removed_faces {
+            mesh.faces.swap_remove(fid.index());
+            // swap_remove reassigns index `mesh.faces.len() - 1` to fid
+            // It's referenced in its oriented edges, update those.
+            if fid.index() != mesh.faces.len() {
+                for oeid in &mesh.faces[fid].oriented_edges {
+                    mesh.oriented_edges[*oeid].face = fid;
+                }
+            }
+        }
+    }
+    if let Err(errors) = validate_mesh(mesh) {
+        for e in &errors {
+            println!("{e}");
         }
     }
 
@@ -644,6 +809,7 @@ fn push_face(mesh: &mut Mesh, fid: FaceId, offset: f64) -> Result<(), String> {
 }
 
 pub fn push_pull_face(mesh: &mut Mesh, fid: FaceId, offset: f64) -> Result<(), String> {
+    assert!(fid.index() < mesh.faces.len());
     if offset < 0.0 {
         return push_face(mesh, fid, offset);
     } else if offset > 0.0 {

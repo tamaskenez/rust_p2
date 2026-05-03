@@ -313,6 +313,7 @@ fn build_mesh(entities: &EntityMap) -> Result<Mesh, StepError> {
         edges: Vec::new(),
         oriented_edges: Vec::new(),
         faces: Vec::new(),
+        removed_oriented_edges: Vec::new(),
     };
 
     // CARTESIAN_POINT('', (x, y, z))

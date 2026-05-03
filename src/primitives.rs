@@ -129,6 +129,7 @@ pub fn make_cube() -> Mesh {
         edges,
         oriented_edges,
         faces,
+        removed_oriented_edges: Vec::new(),
     }
 }
 
@@ -285,6 +286,7 @@ pub fn make_ramp() -> Mesh {
         edges,
         oriented_edges,
         faces,
+        removed_oriented_edges: Vec::new(),
     }
 }
 

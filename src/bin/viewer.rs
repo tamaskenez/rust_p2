@@ -380,6 +380,10 @@ async fn main() {
                                     );
                                     if picked.is_some() {
                                         selected_face = picked;
+                                        println!(
+                                            "selected_face = {}",
+                                            selected_face.unwrap().index()
+                                        );
                                         rebuild_scene(
                                             &mut scene,
                                             &mut current_main,
@@ -428,6 +432,11 @@ async fn main() {
                                         );
                                         if new_sel != selected_face {
                                             selected_face = new_sel;
+                                            if let Some(fid) = selected_face {
+                                                println!("selected_face = {}", fid.index());
+                                            } else {
+                                                println!("selected_face = None");
+                                            }
                                             rebuild_scene(
                                                 &mut scene,
                                                 &mut current_main,
