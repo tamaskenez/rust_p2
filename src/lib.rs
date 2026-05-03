@@ -42,7 +42,7 @@ impl EdgeId {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Ord, PartialOrd)]
 pub struct OrientedEdgeId(u32);
 
 impl OrientedEdgeId {
@@ -100,8 +100,6 @@ pub struct Mesh {
     pub edges: Vec<Edge>,
     pub oriented_edges: Vec<OrientedEdge>,
     pub faces: Vec<Face>,
-    // Removed oriented edge slots are kept around.
-    pub removed_oriented_edges: Vec<OrientedEdgeId>,
 }
 
 impl Mesh {
@@ -147,30 +145,6 @@ impl Mesh {
                 self.edges[oe.edge].vertices[!oe.forward as usize] // Use the first vertex.
             })
             .collect()
-    }
-    pub fn allocate_oriented_edge(&mut self) -> OrientedEdgeId {
-        if let Some(id) = self.removed_oriented_edges.pop() {
-            return id;
-        }
-        let id = OrientedEdgeId::new(self.oriented_edges.len());
-        self.oriented_edges.push(OrientedEdge {
-            edge: EdgeId::INVALID,
-            forward: false,
-            face: FaceId::INVALID,
-        });
-        id
-    }
-    pub fn remove_oriented_edge(&mut self, oeid: OrientedEdgeId) {
-        if oeid.index() + 1 == self.oriented_edges.len() {
-            self.oriented_edges.pop();
-        } else {
-            self.oriented_edges[oeid] = OrientedEdge {
-                edge: EdgeId::INVALID,
-                forward: false,
-                face: FaceId::INVALID,
-            };
-            self.removed_oriented_edges.push(oeid);
-        }
     }
 }
 
@@ -230,9 +204,6 @@ pub fn validate_mesh(mesh: &Mesh) -> Result<(), Vec<String>> {
     let n_edges = mesh.edges.len();
     let n_verts = mesh.vertices.len();
 
-    let removed_oriented_edges: HashSet<OrientedEdgeId> =
-        mesh.removed_oriented_edges.iter().copied().collect();
-
     // Every edge must reference valid vertices and valid OE back-refs.
     for (i, edge) in mesh.edges.iter().enumerate() {
         for (slot, &vid) in edge.vertices.iter().enumerate() {
@@ -244,7 +215,7 @@ pub fn validate_mesh(mesh: &Mesh) -> Result<(), Vec<String>> {
             }
         }
         for (slot, &oe_id) in edge.oriented_edges.iter().enumerate() {
-            if oe_id.index() >= n_oes || removed_oriented_edges.contains(&oe_id) {
+            if oe_id.index() >= n_oes {
                 errors.push(format!(
                     "edge {i}: OE slot {slot} ref {} out of range (mesh has {n_oes} oriented edges)",
                     oe_id.index(),
@@ -272,9 +243,6 @@ pub fn validate_mesh(mesh: &Mesh) -> Result<(), Vec<String>> {
 
     // Every oriented edge must reference a valid edge and face.
     for (i, oe) in mesh.oriented_edges.iter().enumerate() {
-        if removed_oriented_edges.contains(&OrientedEdgeId::new(i)) {
-            continue;
-        }
         if oe.edge.index() >= n_edges {
             errors.push(format!(
                 "oriented_edge {i}: edge ref {} out of range (mesh has {n_edges} edges)",
@@ -301,7 +269,7 @@ pub fn validate_mesh(mesh: &Mesh) -> Result<(), Vec<String>> {
     let mut counts = vec![0u32; n_oes];
     for (fid, face) in mesh.faces.iter().enumerate() {
         for &oe_id in &face.oriented_edges {
-            if oe_id.index() < n_oes && !removed_oriented_edges.contains(&oe_id) {
+            if oe_id.index() < n_oes {
                 counts[oe_id.index()] += 1;
             } else {
                 errors.push(format!(
@@ -313,18 +281,10 @@ pub fn validate_mesh(mesh: &Mesh) -> Result<(), Vec<String>> {
     }
     for (i, &count) in counts.iter().enumerate() {
         let oeid = OrientedEdgeId::new(i);
-        if removed_oriented_edges.contains(&oeid) {
-            if count > 0 {
-                errors.push(format!(
-                    "oriented_edge {i}: it's removed, but referenced by {count} face loops"
-                ));
-            }
-        } else {
-            match count {
-                0 => errors.push(format!("oriented_edge {i}: not referenced by any face")),
-                1 => {}
-                n => errors.push(format!("oriented_edge {i}: referenced by {n} face loops")),
-            }
+        match count {
+            0 => errors.push(format!("oriented_edge {i}: not referenced by any face")),
+            1 => {}
+            n => errors.push(format!("oriented_edge {i}: referenced by {n} face loops")),
         }
     }
 
@@ -335,11 +295,7 @@ pub fn validate_mesh(mesh: &Mesh) -> Result<(), Vec<String>> {
         for j in 0..n {
             let oe_a_id = oes[j];
             let oe_b_id = oes[(j + 1) % n];
-            if oe_a_id.index() >= n_oes
-                || oe_b_id.index() >= n_oes
-                || removed_oriented_edges.contains(&oe_a_id)
-                || removed_oriented_edges.contains(&oe_b_id)
-            {
+            if oe_a_id.index() >= n_oes || oe_b_id.index() >= n_oes {
                 continue;
             }
             let oe_a = &mesh.oriented_edges[oe_a_id];
@@ -373,11 +329,7 @@ pub fn validate_mesh(mesh: &Mesh) -> Result<(), Vec<String>> {
     // Closed-manifold: each edge's two oriented edges must belong to different faces.
     for (i, edge) in mesh.edges.iter().enumerate() {
         let [oe0_id, oe1_id] = edge.oriented_edges;
-        if oe0_id.index() >= n_oes
-            || oe1_id.index() >= n_oes
-            || removed_oriented_edges.contains(&oe0_id)
-            || removed_oriented_edges.contains(&oe1_id)
-        {
+        if oe0_id.index() >= n_oes || oe1_id.index() >= n_oes {
             continue;
         }
         let face0 = mesh.oriented_edges[oe0_id].face;
@@ -401,7 +353,7 @@ pub fn validate_mesh(mesh: &Mesh) -> Result<(), Vec<String>> {
         }
         if let Some(stored) = &face.normal {
             let geometry_ok = face.oriented_edges.iter().all(|&oe_id| {
-                if oe_id.index() >= n_oes || removed_oriented_edges.contains(&oe_id) {
+                if oe_id.index() >= n_oes {
                     return false;
                 }
                 let oe = &mesh.oriented_edges[oe_id];
@@ -513,6 +465,18 @@ fn make_push_pull_workspace(mesh: &mut Mesh, fid: FaceId) -> Result<PushPullWork
     })
 }
 
+fn assert_validate_mesh(mesh: &Mesh) {
+    if cfg!(debug_assertions) {
+        return;
+    }
+    if let Err(errors) = validate_mesh(mesh) {
+        for e in &errors {
+            println!("{e}");
+        }
+        panic!("Mesh validation failed");
+    }
+}
+
 // Moves the face outwards with `offset` which must be positive.
 // For now only works if all adjacent faces are orthogonal to the moved face.
 fn pull_face(mesh: &mut Mesh, fid: FaceId, offset: f64) -> Result<(), String> {
@@ -527,11 +491,7 @@ fn pull_face(mesh: &mut Mesh, fid: FaceId, offset: f64) -> Result<(), String> {
             mesh.vertices[vid].position += vertex_offset;
         }
     } else {
-        if let Err(errors) = validate_mesh(mesh) {
-            for e in &errors {
-                println!("{e}");
-            }
-        }
+        assert_validate_mesh(mesh);
 
         let n = wsp.edges_of_face.len();
         assert_eq!(n, wsp.adjacent_faces.len());
@@ -641,12 +601,9 @@ fn pull_face(mesh: &mut Mesh, fid: FaceId, offset: f64) -> Result<(), String> {
                 normal: None,
             });
         }
-        // Print errors if mesh is invalid.
-        if let Err(errors) = validate_mesh(mesh) {
-            for e in &errors {
-                println!("{e}");
-            }
-        }
+
+        assert_validate_mesh(mesh);
+
         // Merge coplanar skirt faces into original orthogonal faces.
         let mut removed_edges: Vec<EdgeId> = Vec::new();
         let mut removed_oedges: Vec<OrientedEdgeId> = Vec::new();
@@ -703,10 +660,33 @@ fn pull_face(mesh: &mut Mesh, fid: FaceId, offset: f64) -> Result<(), String> {
             mesh.faces[ofid].oriented_edges.extend(oedges_to_copy);
             removed_faces.push(skirtid);
         }
-        // Oriented edge slots are reused because swap_remove would reassign an oriented edge and
-        // it should have been updated in its face, which is a costly search.
+
+        removed_oedges.sort_unstable_by(|a, b| b.cmp(a));
         for oeid in removed_oedges {
-            mesh.remove_oriented_edge(oeid);
+            mesh.oriented_edges.swap_remove(oeid.index());
+            // swap_remove reassigns index `mesh.oriented_edges.len() - 1` to oeid
+            // It's referenced in its edge and face, update those.
+            if oeid.index() != mesh.edges.len() {
+                let oe = &mesh.oriented_edges[oeid];
+
+                let swapped_oeid = OrientedEdgeId::new(mesh.oriented_edges.len());
+
+                let edge = &mut mesh.edges[oe.edge];
+                if edge.oriented_edges[0].index() == mesh.oriented_edges.len() {
+                    edge.oriented_edges[0] = oeid;
+                } else {
+                    assert_eq!(edge.oriented_edges[1], swapped_oeid);
+                    edge.oriented_edges[1] = oeid;
+                }
+
+                let face = &mut mesh.faces[oe.face];
+                let slot = face
+                    .oriented_edges
+                    .iter()
+                    .position(|&id| id == swapped_oeid)
+                    .unwrap();
+                face.oriented_edges[slot] = oeid;
+            }
         }
 
         removed_edges.sort_unstable_by(|a, b| b.cmp(a));
@@ -733,11 +713,8 @@ fn pull_face(mesh: &mut Mesh, fid: FaceId, offset: f64) -> Result<(), String> {
             }
         }
     }
-    if let Err(errors) = validate_mesh(mesh) {
-        for e in &errors {
-            println!("{e}");
-        }
-    }
+
+    assert_validate_mesh(mesh);
 
     Ok(())
 }
