@@ -469,7 +469,6 @@ fn assert_validate_mesh(mesh: &Mesh) {
 }
 
 // Moves the face outwards with `offset` which must be positive.
-// For now only works if all adjacent faces are perpendicular to the moved face.
 fn pull_face(mesh: &mut Mesh, fid: FaceId, offset: f64) -> Result<(), String> {
     assert!(offset > 0.0);
 
