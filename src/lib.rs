@@ -7,7 +7,7 @@ pub use primitives::{make_cube, make_ramp};
 use std::collections::HashMap;
 
 pub const EPS_LENGTH_SYSTEM: f64 = 1e-12;
-pub const FACE_NORMAL_CHECK_MIN_COS_ANGLE: f64 = 1.0 - 1e-11;
+pub const FACE_NORMAL_CHECK_MIN_COS_ANGLE: f64 = 1.0 - 1e-8;
 pub const EPS_ANGLE: f64 = 1e-11;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Ord, PartialOrd)]
@@ -77,13 +77,13 @@ pub struct Edge {
 #[derive(Clone)]
 pub struct OrientedEdge {
     pub edge: EdgeId,
-    pub forward: bool,
+    pub forward: bool, // If false, edge is oriented from edge.vertices[1] to edge.vertices[0].
     pub face: FaceId,
 }
 
 #[derive(Clone)]
 pub struct Face {
-    pub oriented_edges: Vec<OrientedEdgeId>,
+    pub oriented_edges: Vec<OrientedEdgeId>, // CCW order.
     pub normal: Option<Unit<Vector3<f64>>>,
 }
 
@@ -401,16 +401,12 @@ pub fn compute_face_normal(mesh: &Mesh, face_id: FaceId) -> Option<Unit<Vector3<
         .map(|&oe_id| {
             let oe = &mesh.oriented_edges[oe_id];
             let edge = &mesh.edges[oe.edge];
-            let vid = if oe.forward {
-                edge.vertices[0]
-            } else {
-                edge.vertices[1]
-            };
+            let vid = edge.vertices[!oe.forward as usize];
             mesh.vertices[vid].position
         })
         .collect();
 
-    // Newell's method: robust for convex and non-planar polygons.
+    // Newell's method: robust for slightly non-planar polygons.
     let mut normal = Vector3::zeros();
     let n = positions.len();
     for i in 0..n {
@@ -525,7 +521,7 @@ fn pull_face(mesh: &mut Mesh, fid: FaceId, offset: f64) -> Result<(), String> {
         // For adjacent concave perpendicular faces it's possible to pull but not implemented.
         // For concave blocking faces it's not possible due to self-intersection.
         return Err(format!(
-            "Cannot push face with concave adjacent faces, face_id: {}",
+            "Cannot pull face with concave adjacent faces, face_id: {}",
             fid.index()
         ));
     }
@@ -818,7 +814,7 @@ fn pull_face(mesh: &mut Mesh, fid: FaceId, offset: f64) -> Result<(), String> {
             mesh.oriented_edges.swap_remove(oeid.index());
             // swap_remove reassigns index `mesh.oriented_edges.len() - 1` to oeid
             // It's referenced in its edge and face, update those.
-            if oeid.index() != mesh.edges.len() {
+            if oeid.index() != mesh.oriented_edges.len() {
                 let oe = &mesh.oriented_edges[oeid];
 
                 let swapped_oeid = OrientedEdgeId::new(mesh.oriented_edges.len());
