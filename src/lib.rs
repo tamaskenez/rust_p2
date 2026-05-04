@@ -1,5 +1,7 @@
 pub mod primitives;
+
 pub use primitives::{make_cube, make_ramp};
+use std::collections::HashMap;
 
 use nalgebra::Point3;
 use nalgebra::Unit;
@@ -137,6 +139,31 @@ impl Mesh {
                 self.edges[oe.edge].vertices[!oe.forward as usize] // Use the first vertex.
             })
             .collect()
+    }
+    pub fn debug_dump(&self, title: &str) {
+        println!("==== {} ====", title);
+        for (fid, face) in self.faces.iter().enumerate() {
+            println!("FACE#{}", fid);
+            for oeid in &face.oriented_edges {
+                let oe = &self.oriented_edges[*oeid];
+                let eid = oe.edge;
+                let e = &self.edges[eid];
+                let v0 = e.vertices[0];
+                let v1 = e.vertices[1];
+                let p = self.vertices[if oe.forward { v0 } else { v1 }].position;
+                println!(
+                    "    O{}/E{} {}{}{}, ({},{},{})",
+                    oeid.index(),
+                    eid.index(),
+                    v0.index(),
+                    if oe.forward { "->" } else { "<-" },
+                    v1.index(),
+                    p.x,
+                    p.y,
+                    p.z
+                );
+            }
+        }
     }
 }
 
@@ -599,6 +626,17 @@ fn pull_face(mesh: &mut Mesh, fid: FaceId, offset: f64) -> Result<(), String> {
         let mut removed_edges: Vec<EdgeId> = Vec::new();
         let mut removed_oedges: Vec<OrientedEdgeId> = Vec::new();
         let mut removed_faces: Vec<FaceId> = Vec::new();
+
+        // CollinearItem represents 2, possibly collinear edges, one is a skirt edge and the other is its continuation in the adjacent, perpendicular face.
+        // The two edges join at a common vertex where two other edges (edges of the moved face) meet. In case both of those edges are incident
+        // to a perpendicular, adjacent face, then both edges will be removed and the possibly collinear edges are actually collinear and can be merged.
+        struct CollinearItem {
+            pub prev_skirt_edge_removed: bool,
+            pub next_skirt_edge_removed: bool,
+            pub eid_in_perpendicular: EdgeId,
+        }
+
+        let mut skirteid_to_collinears: HashMap<EdgeId, CollinearItem> = HashMap::new();
         for (pfid, skirtid, common_eid) in perpendicular_face_and_skirt_face_edge_vec {
             // Find the common edge's oriented edge in the perpendicular face.
             let common_edge_oes = &mesh.edges[common_eid].oriented_edges;
@@ -622,7 +660,7 @@ fn pull_face(mesh: &mut Mesh, fid: FaceId, offset: f64) -> Result<(), String> {
                 .iter()
                 .position(|&oe| oe == face_and_skirt_oe.0)
                 .unwrap(); // mesh validity ensures Some.
-            // Rotate the oriented edges such that it ends with item at position.
+            // Rotate the oriented edges such that it ends with face_and_skirt_oe.0 at the end.
             let num_oes = face_ofid.oriented_edges.len();
             face_ofid
                 .oriented_edges
@@ -648,10 +686,105 @@ fn pull_face(mesh: &mut Mesh, fid: FaceId, offset: f64) -> Result<(), String> {
                 mesh.oriented_edges[oeid].face = pfid;
                 oedges_to_copy.push(oeid);
             }
+
+            // Store these two edge ids for inserting them into skirteid_to_collinears later.
+            let collinear_perpendicular_eid_before_common_edge =
+                mesh.oriented_edges[*mesh.faces[pfid].oriented_edges.last().unwrap()].edge;
+            let collinear_skirt_eid_after_common_edge =
+                mesh.oriented_edges[*oedges_to_copy.first().unwrap()].edge;
+
             mesh.faces[pfid].oriented_edges.extend(oedges_to_copy);
             removed_faces.push(skirtid);
+            // Mark the possibly collinear edges to be merged.
+            let collinear_skirt_oeid = *mesh.faces[pfid].oriented_edges.last().unwrap();
+            let collinear_skirt_eid = mesh.oriented_edges[collinear_skirt_oeid].edge;
+            let collinear_perpendicular_eid =
+                mesh.oriented_edges[mesh.faces[pfid].oriented_edges[0]].edge;
+
+            // Insert one side of the collinear edge.
+            if let Some(item) = skirteid_to_collinears.get_mut(&collinear_skirt_eid) {
+                assert_eq!(item.eid_in_perpendicular, collinear_perpendicular_eid);
+                item.next_skirt_edge_removed = true;
+            } else {
+                skirteid_to_collinears.insert(
+                    collinear_skirt_eid,
+                    CollinearItem {
+                        prev_skirt_edge_removed: false,
+                        next_skirt_edge_removed: true,
+                        eid_in_perpendicular: collinear_perpendicular_eid,
+                    },
+                );
+            }
+
+            // Insert the other side of the collinear edge.
+            if let Some(item) =
+                skirteid_to_collinears.get_mut(&collinear_skirt_eid_after_common_edge)
+            {
+                assert_eq!(
+                    item.eid_in_perpendicular,
+                    collinear_perpendicular_eid_before_common_edge
+                );
+                item.prev_skirt_edge_removed = true;
+            } else {
+                skirteid_to_collinears.insert(
+                    collinear_skirt_eid_after_common_edge,
+                    CollinearItem {
+                        prev_skirt_edge_removed: true,
+                        next_skirt_edge_removed: false,
+                        eid_in_perpendicular: collinear_perpendicular_eid_before_common_edge,
+                    },
+                );
+            }
         }
 
+        // Merge collinear edges.
+        for (skirt_eid, item) in &skirteid_to_collinears {
+            if !item.prev_skirt_edge_removed || !item.next_skirt_edge_removed {
+                continue;
+            }
+            // We're merging skirt_eid with item.eid_in_perpendicular, in 2 faces.
+            // We will keep the skirt_eid edge and its oriented edges and extend the edge.
+            // We will remove the perpendicular_edge and its oriented edges.
+
+            // Remove the edge.
+            removed_edges.push(item.eid_in_perpendicular);
+
+            // Remove the oriented edges, also from the face loops.
+            let mut remove_oriented_edge_from_face_loop =
+                |face_id: FaceId, oe_id: OrientedEdgeId| {
+                    let oes = &mut mesh.faces[face_id].oriented_edges;
+                    let pos = oes.iter().position(|&x| x == oe_id).unwrap();
+                    oes.remove(pos); // Shifts elements after it.
+                };
+            let perpendicular_edge = &mesh.edges[item.eid_in_perpendicular];
+            for i in [0, 1] {
+                let oeid = perpendicular_edge.oriented_edges[i];
+                removed_oedges.push(oeid);
+                remove_oriented_edge_from_face_loop(mesh.oriented_edges[oeid].face, oeid);
+            }
+            // Extend the remaining edge.
+            let perpendicular_edge_vertices = perpendicular_edge.vertices;
+            let skirt_edge = &mut mesh.edges[*skirt_eid];
+            // Find the common vertex.
+            let mut common_vertex_count = 0;
+            let mut common_vertex_indices: Option<(usize, usize)> = None;
+            for i in [0, 1] {
+                for j in [0, 1] {
+                    if skirt_edge.vertices[i] == perpendicular_edge_vertices[j] {
+                        common_vertex_count += 1;
+                        common_vertex_indices = Some((i, j));
+                        // Note: perpendicular_edge_vertices[j] could be removed.
+                        // We either need to introduce vertex -> edge links or do a vertex cleanup once in a while.
+                    }
+                }
+            }
+            assert_eq!(common_vertex_count, 1);
+            let ij = common_vertex_indices.unwrap();
+            // Copy the other one.
+            skirt_edge.vertices[ij.0] = perpendicular_edge_vertices[1 - ij.1];
+        }
+
+        // Realize the removals.
         removed_oedges.sort_unstable_by(|a, b| b.cmp(a));
         for oeid in removed_oedges {
             mesh.oriented_edges.swap_remove(oeid.index());

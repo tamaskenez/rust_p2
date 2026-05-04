@@ -1,4 +1,5 @@
 use std::cell::RefCell;
+use std::collections::HashSet;
 use std::f32::consts::PI;
 use std::rc::Rc;
 
@@ -7,7 +8,8 @@ use kiss3d::event::{Action, MouseButton, WindowEvent};
 use kiss3d::prelude::*;
 
 use brep::{
-    Edge, FaceId, Mesh, OrientedEdge, compute_face_normal, make_cube, make_ramp, push_pull_face,
+    Edge, FaceId, Mesh, OrientedEdge, VertexId, compute_face_normal, make_cube, make_ramp,
+    push_pull_face,
 };
 
 #[derive(PartialEq, Eq)]
@@ -19,7 +21,6 @@ enum Tool {
 struct PushPullOp {
     mesh_before: Mesh,
     offset: f64,
-    error: Option<String>,
     scale: f64,
     screen_normal: Vec2,
 }
@@ -243,8 +244,13 @@ fn rebuild_scene(
     let mut group = scene.add_group();
     group.set_position(Vec3::new(0.0, 0.0, OBJECT_Z));
     group.set_rotation(rotation);
-    for v in &mesh.vertices {
-        let p = v.position;
+    let mut vids: HashSet<VertexId> = HashSet::new();
+    for edge in &mesh.edges {
+        vids.insert(edge.vertices[0]);
+        vids.insert(edge.vertices[1]);
+    }
+    for vid in &vids {
+        let p = mesh.vertices[*vid].position;
         let local = Vec3::new(p.x as f32, p.y as f32, p.z as f32) - centroid;
         let mut s = group.add_sphere(0.03);
         s.set_position(local);
@@ -451,7 +457,6 @@ async fn main() {
                                 current_op = Some(PushPullOp {
                                     mesh_before: m.clone(),
                                     offset: 0.0,
-                                    error: None,
                                     scale,
                                     screen_normal,
                                 });
