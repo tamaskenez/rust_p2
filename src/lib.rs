@@ -418,8 +418,8 @@ pub fn compute_face_normal(mesh: &Mesh, face_id: FaceId) -> Option<Unit<Vector3<
 struct PushPullWorkspace {
     pub face_normal: Unit<Vector3<f64>>,
     pub adjacent_faces: Vec<FaceId>,
-    pub orthogonal_faces_sorted: Vec<FaceId>,
-    pub all_faces_orthogonal: bool,
+    pub perpendicular_faces_sorted: Vec<FaceId>,
+    pub all_faces_are_perpendicular: bool,
     pub vertices_of_face: Vec<VertexId>,
     pub edges_of_face: Vec<EdgeId>,
 }
@@ -429,28 +429,28 @@ fn make_push_pull_workspace(mesh: &mut Mesh, fid: FaceId) -> Result<PushPullWork
         .face_normal(fid)
         .ok_or_else(|| format!("Face normal computation failed for face {}", fid.index()))?;
 
-    // Enumerate adjacent faces and collect orthogonal faces.
+    // Enumerate adjacent faces and collect perpendicular faces.
     let adjacent_faces = mesh.adjacent_faces(fid);
-    let mut orthogonal_faces_sorted: Vec<FaceId> = Vec::new();
-    let mut all_faces_orthogonal = true;
+    let mut perpendicular_faces_sorted: Vec<FaceId> = Vec::new();
+    let mut all_faces_are_perpendicular = true;
     for &afid in &adjacent_faces {
         let adjacent_face_normal = mesh
             .face_normal(afid)
             .ok_or_else(|| format!("Face normal computation failed for face {}", afid.index()))?;
         if adjacent_face_normal.dot(face_normal.as_ref()).abs() < MAX_ORTHOGONAL_COS_ANGLE {
-            orthogonal_faces_sorted.push(afid);
+            perpendicular_faces_sorted.push(afid);
         } else {
-            all_faces_orthogonal = false;
+            all_faces_are_perpendicular = false;
         }
     }
 
-    orthogonal_faces_sorted.sort_unstable();
+    perpendicular_faces_sorted.sort_unstable();
 
     Ok(PushPullWorkspace {
         face_normal: face_normal,
         adjacent_faces: adjacent_faces,
-        orthogonal_faces_sorted,
-        all_faces_orthogonal: all_faces_orthogonal,
+        perpendicular_faces_sorted,
+        all_faces_are_perpendicular,
         vertices_of_face: mesh.vertices_of_face(fid),
         edges_of_face: mesh.edges_of_face(fid), // Note: retrieving edges twice (also for vertices_of_face)
     })
@@ -469,14 +469,14 @@ fn assert_validate_mesh(mesh: &Mesh) {
 }
 
 // Moves the face outwards with `offset` which must be positive.
-// For now only works if all adjacent faces are orthogonal to the moved face.
+// For now only works if all adjacent faces are perpendicular to the moved face.
 fn pull_face(mesh: &mut Mesh, fid: FaceId, offset: f64) -> Result<(), String> {
     assert!(offset > 0.0);
 
     let wsp = make_push_pull_workspace(mesh, fid)?;
 
     let vertex_offset = wsp.face_normal.into_inner() * offset;
-    if wsp.all_faces_orthogonal {
+    if wsp.all_faces_are_perpendicular {
         // Move the vertices.
         for &vid in &wsp.vertices_of_face {
             mesh.vertices[vid].position += vertex_offset;
@@ -523,7 +523,8 @@ fn pull_face(mesh: &mut Mesh, fid: FaceId, offset: f64) -> Result<(), String> {
         }
         // Add the skirt faces.
         let first_skirt_face_id = FaceId::new(mesh.faces.len());
-        let mut orthogonal_face_and_skirt_face_edge_vec: Vec<(FaceId, FaceId, EdgeId)> = Vec::new();
+        let mut perpendicular_face_and_skirt_face_edge_vec: Vec<(FaceId, FaceId, EdgeId)> =
+            Vec::new();
         for i in 0..n {
             let skirt_face_id = FaceId::new(first_skirt_face_id.index() + i);
             let first_oedge_id = mesh.oriented_edges.len();
@@ -567,13 +568,13 @@ fn pull_face(mesh: &mut Mesh, fid: FaceId, offset: f64) -> Result<(), String> {
             bottom_edge_oes[!forward as usize] = oriented_edges[2];
             let face_across_bottom_edge =
                 mesh.oriented_edges[bottom_edge_oes[forward as usize]].face;
-            // Store information if this is an orthogonal face which later needs to be merged with the skirt.
+            // Store information if this is a perpendicular face which later needs to be merged with the skirt.
             if wsp
-                .orthogonal_faces_sorted
+                .perpendicular_faces_sorted
                 .binary_search(&face_across_bottom_edge)
                 .is_ok()
             {
-                orthogonal_face_and_skirt_face_edge_vec.push((
+                perpendicular_face_and_skirt_face_edge_vec.push((
                     face_across_bottom_edge,
                     skirt_face_id,
                     bottom_edge_id,
@@ -595,28 +596,28 @@ fn pull_face(mesh: &mut Mesh, fid: FaceId, offset: f64) -> Result<(), String> {
 
         assert_validate_mesh(mesh);
 
-        // Merge coplanar skirt faces into original orthogonal faces.
+        // Merge coplanar skirt faces into the original perpendicular, adjacent faces.
         let mut removed_edges: Vec<EdgeId> = Vec::new();
         let mut removed_oedges: Vec<OrientedEdgeId> = Vec::new();
         let mut removed_faces: Vec<FaceId> = Vec::new();
-        for (ofid, skirtid, common_eid) in orthogonal_face_and_skirt_face_edge_vec {
-            // Find the common edge's oriented edge in the orthogonal face.
+        for (pfid, skirtid, common_eid) in perpendicular_face_and_skirt_face_edge_vec {
+            // Find the common edge's oriented edge in the perpendicular face.
             let common_edge_oes = &mesh.edges[common_eid].oriented_edges;
             removed_oedges.extend(common_edge_oes);
             removed_edges.push(common_eid);
             let f0 = mesh.oriented_edges[common_edge_oes[0]].face;
             let f1 = mesh.oriented_edges[common_edge_oes[1]].face;
-            // Find which oriented edge id belongs to the orthogonal and skirt faces.
-            let face_and_skirt_oe = if f0 == ofid {
+            // Find which oriented edge id belongs to the perpendicular and skirt faces.
+            let face_and_skirt_oe = if f0 == pfid {
                 assert_eq!(f1, skirtid);
                 (common_edge_oes[0], common_edge_oes[1])
             } else {
                 assert_eq!(f0, skirtid);
-                assert_eq!(f1, ofid);
+                assert_eq!(f1, pfid);
                 (common_edge_oes[1], common_edge_oes[0])
             };
-            // Find face_and_skirt_oe.0 in the orthogonal face.
-            let face_ofid = &mut mesh.faces[ofid];
+            // Find face_and_skirt_oe.0 in the perpendicular face.
+            let face_ofid = &mut mesh.faces[pfid];
             let pos_in_ofid = face_ofid
                 .oriented_edges
                 .iter()
@@ -645,10 +646,10 @@ fn pull_face(mesh: &mut Mesh, fid: FaceId, offset: f64) -> Result<(), String> {
             let mut oedges_to_copy: Vec<OrientedEdgeId> = Vec::with_capacity(num_skirt_edges - 1);
             for i in 1..num_skirt_edges {
                 let oeid = mesh.faces[skirtid].oriented_edges[(pos_in_skirt + i) % num_skirt_edges];
-                mesh.oriented_edges[oeid].face = ofid;
+                mesh.oriented_edges[oeid].face = pfid;
                 oedges_to_copy.push(oeid);
             }
-            mesh.faces[ofid].oriented_edges.extend(oedges_to_copy);
+            mesh.faces[pfid].oriented_edges.extend(oedges_to_copy);
             removed_faces.push(skirtid);
         }
 
@@ -711,13 +712,13 @@ fn pull_face(mesh: &mut Mesh, fid: FaceId, offset: f64) -> Result<(), String> {
 }
 
 // Moves the face inwards with `-offset` which must be negative.
-// Rejects if the moved faces has non-orthogonal adjacent faces.
+// Rejects if the moved faces has non-perpendicular adjacent faces.
 fn push_face(mesh: &mut Mesh, fid: FaceId, offset: f64) -> Result<(), String> {
     assert!(offset < 0.0);
 
     let wsp = make_push_pull_workspace(mesh, fid)?;
 
-    let farthest_offset = if wsp.all_faces_orthogonal {
+    let farthest_offset = if wsp.all_faces_are_perpendicular {
         // Take the set of edges starting at the vertices of the moved face. We need the shortest one, that will be the farthest we can push the face.
         let mut shortest_edge_length = f64::MAX;
         for &oeid in &mesh.faces[fid].oriented_edges {
