@@ -84,7 +84,7 @@ pub struct OrientedEdge {
 #[derive(Clone)]
 pub struct Face {
     pub oriented_edges: Vec<OrientedEdgeId>, // CCW order.
-    pub normal: Option<Unit<Vector3<f64>>>,
+    pub normal: Option<Unit<Vector3<f64>>>,  // Cached face normal.
 }
 
 #[derive(Clone)]
@@ -96,6 +96,7 @@ pub struct Mesh {
 }
 
 impl Mesh {
+    // Get/compute cached face normal.
     pub fn face_normal(&mut self, fid: FaceId) -> Option<Unit<Vector3<f64>>> {
         if let Some(n) = self.faces[fid].normal {
             return Some(n);
@@ -652,7 +653,7 @@ fn pull_face(mesh: &mut Mesh, fid: FaceId, offset: f64) -> Result<(), String> {
         let mut removed_faces: Vec<FaceId> = Vec::new();
 
         // CollinearItem represents 2, possibly collinear edges, one is a skirt edge and the other is its continuation in the adjacent, perpendicular face.
-        // The two edges join at a common vertex where two other edges (edges of the moved face) meet. In case both of those edges are incident
+        // The two edges join at a common vertex where two other edges (originally, edges of the moved face) meet. In case both of those edges are incident
         // to a perpendicular, adjacent face, then both edges will be removed and the possibly collinear edges are actually collinear and can be merged.
         struct CollinearItem {
             pub prev_skirt_edge_removed: bool,
