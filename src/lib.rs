@@ -1,15 +1,14 @@
 pub mod primitives;
 
-pub use primitives::{make_cube, make_ramp};
-use std::collections::HashMap;
-
 use nalgebra::Point3;
 use nalgebra::Unit;
 use nalgebra::Vector3;
+pub use primitives::{make_cube, make_ramp};
+use std::collections::HashMap;
 
 pub const EPS_LENGTH_SYSTEM: f64 = 1e-12;
 pub const FACE_NORMAL_CHECK_MIN_COS_ANGLE: f64 = 1.0 - 1e-11;
-pub const MAX_ORTHOGONAL_COS_ANGLE: f64 = 1e-11;
+pub const EPS_ANGLE: f64 = 1e-11;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Ord, PartialOrd)]
 pub struct VertexId(u32);
@@ -447,6 +446,8 @@ struct PushPullWorkspace {
     pub adjacent_faces: Vec<FaceId>,
     pub perpendicular_faces_sorted: Vec<FaceId>,
     pub all_faces_are_perpendicular: bool,
+    pub has_adjacent_concave_perpendicular_faces: bool,
+    pub has_adjacent_concave_blocking_faces: bool,
     pub vertices_of_face: Vec<VertexId>,
     pub edges_of_face: Vec<EdgeId>,
 }
@@ -456,17 +457,56 @@ fn make_push_pull_workspace(mesh: &mut Mesh, fid: FaceId) -> Result<PushPullWork
         .face_normal(fid)
         .ok_or_else(|| format!("Face normal computation failed for face {}", fid.index()))?;
 
-    // Enumerate adjacent faces and collect perpendicular faces.
-    let adjacent_faces = mesh.adjacent_faces(fid);
+    // List adjacent faces and determine the dihedral angle between the moved and the adjacent face.
     let mut perpendicular_faces_sorted: Vec<FaceId> = Vec::new();
     let mut all_faces_are_perpendicular = true;
-    for &afid in &adjacent_faces {
-        let adjacent_face_normal = mesh
-            .face_normal(afid)
-            .ok_or_else(|| format!("Face normal computation failed for face {}", afid.index()))?;
-        if adjacent_face_normal.dot(face_normal.as_ref()).abs() < MAX_ORTHOGONAL_COS_ANGLE {
-            perpendicular_faces_sorted.push(afid);
+    let mut adjacent_faces = Vec::with_capacity(mesh.faces[fid].oriented_edges.len());
+    let mut has_adjacent_concave_perpendicular_faces = false;
+    let mut has_adjacent_concave_blocking_faces = false;
+    let face_oriented_edges = mesh.faces[fid].oriented_edges.clone(); // Avoid borrow problems for face_normal cache.
+    for &oeid in &face_oriented_edges {
+        let oe = mesh.oriented_edges[oeid].clone();
+        let common_edge = mesh.edges[oe.edge].clone();
+        let other_fid = mesh.oriented_edges[common_edge.oriented_edges[oe.forward as usize]].face;
+        assert_ne!(fid, other_fid);
+        adjacent_faces.push(other_fid);
+        let other_face_normal = mesh.face_normal(other_fid).ok_or_else(|| {
+            format!(
+                "Face normal computation failed for face {}",
+                other_fid.index()
+            )
+        })?;
+        let common_edge_dir = Unit::try_new(
+            (mesh.vertices[common_edge.vertices[0]].position
+                - mesh.vertices[common_edge.vertices[1]].position)
+                * (if oe.forward { -1.0 } else { 1.0 }),
+            EPS_LENGTH_SYSTEM,
+        )
+        .ok_or_else(|| {
+            format!(
+                "Edge direction computation failed for edge {}",
+                oe.edge.index()
+            )
+        })?;
+        let v0 = face_normal.cross(&common_edge_dir);
+        let v1 = other_face_normal.cross(&common_edge_dir);
+        let cos_angle = v0.dot(&v1);
+        let sin_angle = v0.cross(&v1).dot(&common_edge_dir);
+        let angle = sin_angle.atan2(cos_angle);
+        println!("angle: {}", angle / std::f64::consts::PI * 180.0);
+        if angle < -std::f64::consts::FRAC_PI_2 - EPS_ANGLE {
+            // More concave than right angle.
+            all_faces_are_perpendicular = false;
+            has_adjacent_concave_blocking_faces = true;
+        } else if angle < -std::f64::consts::FRAC_PI_2 + EPS_ANGLE {
+            // Concave right angle.
+            all_faces_are_perpendicular = false;
+            has_adjacent_concave_perpendicular_faces = true;
+        } else if (angle - std::f64::consts::FRAC_PI_2).abs() < EPS_ANGLE {
+            // Right angle.
+            perpendicular_faces_sorted.push(other_fid);
         } else {
+            // Normal, concave or convex angle.
             all_faces_are_perpendicular = false;
         }
     }
@@ -478,6 +518,8 @@ fn make_push_pull_workspace(mesh: &mut Mesh, fid: FaceId) -> Result<PushPullWork
         adjacent_faces: adjacent_faces,
         perpendicular_faces_sorted,
         all_faces_are_perpendicular,
+        has_adjacent_concave_perpendicular_faces,
+        has_adjacent_concave_blocking_faces,
         vertices_of_face: mesh.vertices_of_face(fid),
         edges_of_face: mesh.edges_of_face(fid), // Note: retrieving edges twice (also for vertices_of_face)
     })
@@ -500,6 +542,15 @@ fn pull_face(mesh: &mut Mesh, fid: FaceId, offset: f64) -> Result<(), String> {
     assert!(offset > 0.0);
 
     let wsp = make_push_pull_workspace(mesh, fid)?;
+
+    if wsp.has_adjacent_concave_perpendicular_faces || wsp.has_adjacent_concave_blocking_faces {
+        // For adjacent concave perpendicular faces it's possible to pull but not implemented.
+        // For concave blocking faces it's not possible due to self-intersection.
+        return Err(format!(
+            "Cannot push face with concave adjacent faces, face_id: {}",
+            fid.index()
+        ));
+    }
 
     let vertex_offset = wsp.face_normal.into_inner() * offset;
     if wsp.all_faces_are_perpendicular {
@@ -849,6 +900,14 @@ fn push_face(mesh: &mut Mesh, fid: FaceId, offset: f64) -> Result<(), String> {
     assert!(offset < 0.0);
 
     let wsp = make_push_pull_workspace(mesh, fid)?;
+
+    if wsp.has_adjacent_concave_perpendicular_faces || wsp.has_adjacent_concave_blocking_faces {
+        // Push is possible in these cases but not implemented.
+        return Err(format!(
+            "Cannot push face with concave adjacent faces, face_id: {}",
+            fid.index()
+        ));
+    }
 
     let farthest_offset = if wsp.all_faces_are_perpendicular {
         // Take the set of edges starting at the vertices of the moved face. We need the shortest one, that will be the farthest we can push the face.

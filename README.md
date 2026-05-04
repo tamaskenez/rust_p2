@@ -17,9 +17,9 @@
 - [X] Bug: face can't be pushed in certain cases
 - [X] Colinear edges must be merged after pull
 - [ ] Refactor/cleanup/missing tests
-- [ ] Viewer could remember the last known good state, instead of jumping back to the initial state
-- [ ] Don't allow self-intersection
+- [X] Don't allow self-intersection
 
 ## Future possibilities
 
+- Viewer could remember the last known good state, instead of jumping back to the initial state
 - Allow pulling along concave, perpendicular adjacent face
