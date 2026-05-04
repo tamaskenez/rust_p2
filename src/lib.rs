@@ -473,7 +473,6 @@ fn make_push_pull_workspace(mesh: &mut Mesh, fid: FaceId) -> Result<PushPullWork
         let cos_angle = v0.dot(&v1);
         let sin_angle = v0.cross(&v1).dot(&common_edge_dir);
         let angle = sin_angle.atan2(cos_angle);
-        println!("angle: {}", angle / std::f64::consts::PI * 180.0);
         if angle < -std::f64::consts::FRAC_PI_2 - EPS_ANGLE {
             // More concave than right angle.
             all_faces_are_perpendicular = false;
@@ -494,7 +493,7 @@ fn make_push_pull_workspace(mesh: &mut Mesh, fid: FaceId) -> Result<PushPullWork
     perpendicular_faces_sorted.sort_unstable();
 
     Ok(PushPullWorkspace {
-        face_normal: face_normal,
+        face_normal,
         perpendicular_faces_sorted,
         all_faces_are_perpendicular,
         has_adjacent_concave_perpendicular_faces,
@@ -505,7 +504,7 @@ fn make_push_pull_workspace(mesh: &mut Mesh, fid: FaceId) -> Result<PushPullWork
 }
 
 fn assert_validate_mesh(mesh: &Mesh) {
-    if cfg!(debug_assertions) {
+    if !cfg!(debug_assertions) {
         return;
     }
     if let Err(errors) = validate_mesh(mesh) {
@@ -887,7 +886,11 @@ fn push_face(mesh: &mut Mesh, fid: FaceId, offset: f64) -> Result<(), String> {
         ));
     }
 
-    let farthest_offset = if wsp.all_faces_are_perpendicular {
+    if !wsp.all_faces_are_perpendicular {
+        return Err("Push with non-perpendicular adjacent faces is not implemented".to_string());
+    }
+
+    let farthest_offset = {
         // Take the set of edges starting at the vertices of the moved face. We need the shortest one, that will be the farthest we can push the face.
         let mut shortest_edge_length = f64::MAX;
         for &oeid in &mesh.faces[fid].oriented_edges {
@@ -913,8 +916,6 @@ fn push_face(mesh: &mut Mesh, fid: FaceId, offset: f64) -> Result<(), String> {
             shortest_edge_length = shortest_edge_length.min(length);
         }
         -shortest_edge_length
-    } else {
-        0.0
     };
 
     if offset < farthest_offset {
