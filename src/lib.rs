@@ -105,23 +105,6 @@ impl Mesh {
         Some(n)
     }
 
-    pub fn adjacent_faces(&self, fid: FaceId) -> Vec<FaceId> {
-        self.faces[fid]
-            .oriented_edges
-            .iter()
-            .map(|&oeid| {
-                let oe = &self.oriented_edges[oeid];
-                let oes_of_edge_of_oe = &self.edges[oe.edge].oriented_edges;
-                // Find the twin oriented edge.
-                let opposite_oeid = if oe.forward {
-                    oes_of_edge_of_oe[1]
-                } else {
-                    oes_of_edge_of_oe[0]
-                };
-                self.oriented_edges[opposite_oeid].face
-            })
-            .collect()
-    }
     pub fn edges_of_face(&self, fid: FaceId) -> Vec<EdgeId> {
         self.faces[fid]
             .oriented_edges
@@ -443,7 +426,6 @@ pub fn compute_face_normal(mesh: &Mesh, face_id: FaceId) -> Option<Unit<Vector3<
 
 struct PushPullWorkspace {
     pub face_normal: Unit<Vector3<f64>>,
-    pub adjacent_faces: Vec<FaceId>,
     pub perpendicular_faces_sorted: Vec<FaceId>,
     pub all_faces_are_perpendicular: bool,
     pub has_adjacent_concave_perpendicular_faces: bool,
@@ -460,7 +442,6 @@ fn make_push_pull_workspace(mesh: &mut Mesh, fid: FaceId) -> Result<PushPullWork
     // List adjacent faces and determine the dihedral angle between the moved and the adjacent face.
     let mut perpendicular_faces_sorted: Vec<FaceId> = Vec::new();
     let mut all_faces_are_perpendicular = true;
-    let mut adjacent_faces = Vec::with_capacity(mesh.faces[fid].oriented_edges.len());
     let mut has_adjacent_concave_perpendicular_faces = false;
     let mut has_adjacent_concave_blocking_faces = false;
     let face_oriented_edges = mesh.faces[fid].oriented_edges.clone(); // Avoid borrow problems for face_normal cache.
@@ -469,7 +450,6 @@ fn make_push_pull_workspace(mesh: &mut Mesh, fid: FaceId) -> Result<PushPullWork
         let common_edge = mesh.edges[oe.edge].clone();
         let other_fid = mesh.oriented_edges[common_edge.oriented_edges[oe.forward as usize]].face;
         assert_ne!(fid, other_fid);
-        adjacent_faces.push(other_fid);
         let other_face_normal = mesh.face_normal(other_fid).ok_or_else(|| {
             format!(
                 "Face normal computation failed for face {}",
@@ -515,7 +495,6 @@ fn make_push_pull_workspace(mesh: &mut Mesh, fid: FaceId) -> Result<PushPullWork
 
     Ok(PushPullWorkspace {
         face_normal: face_normal,
-        adjacent_faces: adjacent_faces,
         perpendicular_faces_sorted,
         all_faces_are_perpendicular,
         has_adjacent_concave_perpendicular_faces,
@@ -562,7 +541,6 @@ fn pull_face(mesh: &mut Mesh, fid: FaceId, offset: f64) -> Result<(), String> {
         assert_validate_mesh(mesh);
 
         let n = wsp.edges_of_face.len();
-        assert_eq!(n, wsp.adjacent_faces.len());
 
         // Recreate the oriented edges and edges of the pulled face with new vertices.
         let first_pulled_vertex_id = VertexId::new(mesh.vertices.len());
@@ -979,37 +957,6 @@ mod tests {
         v
     }
 
-    #[test]
-    fn adjacent_faces_of_cube() {
-        let m = make_cube();
-        assert_eq!(
-            rotate(m.adjacent_faces(FaceId::new(2))),
-            vec![
-                FaceId::new(0),
-                FaceId::new(5),
-                FaceId::new(1),
-                FaceId::new(4)
-            ]
-        );
-        assert_eq!(
-            rotate(m.adjacent_faces(FaceId::new(3))),
-            vec![
-                FaceId::new(0),
-                FaceId::new(4),
-                FaceId::new(1),
-                FaceId::new(5)
-            ]
-        );
-        assert_eq!(
-            rotate(m.adjacent_faces(FaceId::new(1))),
-            vec![
-                FaceId::new(2),
-                FaceId::new(5),
-                FaceId::new(3),
-                FaceId::new(4)
-            ]
-        );
-    }
     #[test]
     fn vertices_of_face() {
         let m = make_cube();
