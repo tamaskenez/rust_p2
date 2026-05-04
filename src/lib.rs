@@ -5,8 +5,6 @@ use nalgebra::Point3;
 use nalgebra::Unit;
 use nalgebra::Vector3;
 
-use std::collections::HashSet;
-
 pub const EPS_LENGTH_SYSTEM: f64 = 1e-12;
 pub const FACE_NORMAL_CHECK_MIN_COS_ANGLE: f64 = 1.0 - 1e-11;
 pub const MAX_ORTHOGONAL_COS_ANGLE: f64 = 1e-11;
@@ -720,44 +718,31 @@ fn push_face(mesh: &mut Mesh, fid: FaceId, offset: f64) -> Result<(), String> {
     let wsp = make_push_pull_workspace(mesh, fid)?;
 
     let farthest_offset = if wsp.all_faces_orthogonal {
-        // Take all the edges of the adjacent, orthogonal faces. Filter for those whose faces are not both orthogonal, adjacent faces.
-        // We achieve this by adding the edge on the first encounter and remove on the second.
-        // First add the edges of the moved face.
-        let mut farthest_offset_edges: HashSet<EdgeId> = HashSet::new();
-        farthest_offset_edges.extend(wsp.edges_of_face);
-        // Then add all the edges of the orthogonal faces.
-        for ofid in &wsp.adjacent_faces {
-            for eid in mesh.edges_of_face(*ofid) {
-                if !farthest_offset_edges.insert(eid) {
-                    farthest_offset_edges.remove(&eid);
-                }
-            }
+        // Take the set of edges starting at the vertices of the moved face. We need the shortest one, that will be the farthest we can push the face.
+        let mut shortest_edge_length = f64::MAX;
+        for &oeid in &mesh.faces[fid].oriented_edges {
+            // Find the twin oriented edge.
+            let oe = &mesh.oriented_edges[oeid];
+            let oeid_in_adjacent_face = mesh.edges[oe.edge].oriented_edges[oe.forward as usize];
+            assert_ne!(oeid_in_adjacent_face, oeid);
+            // Find the edge after oeid_in_adjacent_face in the adjacent face.
+            let adjacent_fid = mesh.oriented_edges[oeid_in_adjacent_face].face;
+            let adjacent_face = &mesh.faces[adjacent_fid];
+            let this_oe_pos = adjacent_face
+                .oriented_edges
+                .iter()
+                .position(|&oeid2| oeid2 == oeid_in_adjacent_face)
+                .unwrap(); // Mesh validity guarantees Some.
+            let next_oeid = adjacent_face.oriented_edges
+                [(this_oe_pos + 1) % adjacent_face.oriented_edges.len()];
+            let next_oe = &mesh.oriented_edges[next_oeid];
+            let skirt_edge = &mesh.edges[next_oe.edge];
+            let length = (mesh.vertices[skirt_edge.vertices[0]].position
+                - mesh.vertices[skirt_edge.vertices[1]].position)
+                .norm();
+            shortest_edge_length = shortest_edge_length.min(length);
         }
-        // Collect vertices.
-        let mut farthest_offset_vertices: HashSet<VertexId> = HashSet::new();
-        for eid in farthest_offset_edges {
-            farthest_offset_vertices.extend(&mesh.edges[eid].vertices);
-        }
-
-        // Find the vertex of the moved face that is most in the push direction. Theoretically, all vertices should be equally far.
-        let mut lowest_vid = wsp.vertices_of_face[0];
-        for vid in &wsp.vertices_of_face {
-            if (mesh.vertices[*vid].position - mesh.vertices[lowest_vid].position)
-                .dot(&wsp.face_normal)
-                < 0.0
-            {
-                lowest_vid = *vid;
-            }
-        }
-
-        // Find the vertex nearest to the moved face. That vertex defines the maximum (negative) offset.
-        let lowest_position_in_face = mesh.vertices[lowest_vid].position;
-        let mut farthest_offset: f64 = -f64::INFINITY;
-        for vid in farthest_offset_vertices {
-            farthest_offset = farthest_offset
-                .max((mesh.vertices[vid].position - lowest_position_in_face).dot(&wsp.face_normal));
-        }
-        farthest_offset
+        -shortest_edge_length
     } else {
         0.0
     };

@@ -14,7 +14,7 @@
 
 ## TODO
 
-- Bug: face can't be pushed in certain cases
-- Colinear edges must be merged after pull
-- Refactor/cleanup/missing tests
-- Viewer could remember the last known good state, instead of jumping back to the initial state
+- [X] Bug: face can't be pushed in certain cases
+- [ ] Colinear edges must be merged after pull
+- [ ] Refactor/cleanup/missing tests
+- [ ] Viewer could remember the last known good state, instead of jumping back to the initial state
