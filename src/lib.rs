@@ -7,10 +7,7 @@ use nalgebra::Vector3;
 
 use std::collections::HashSet;
 
-pub const EPS_LENGTH_USER: f64 = 0.01;
 pub const EPS_LENGTH_SYSTEM: f64 = 1e-12;
-pub const EPS_ANGLE_USER: f64 = 0.05 * (std::f64::consts::PI / 180.0);
-pub const EPS_ANGLE_SYSTEM: f64 = 1e-11;
 pub const FACE_NORMAL_CHECK_MIN_COS_ANGLE: f64 = 1.0 - 1e-11;
 pub const MAX_ORTHOGONAL_COS_ANGLE: f64 = 1e-11;
 
