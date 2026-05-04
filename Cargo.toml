@@ -6,6 +6,9 @@ edition = "2024"
 [lib]
 crate-type = ["staticlib", "rlib"]
 
+[dev-dependencies]
+approx = "0.5"
+
 [dependencies]
 nalgebra = "0.33"
 kiss3d = { version = "0.41", features = ["egui"] }

@@ -3,7 +3,7 @@ pub mod primitives;
 use nalgebra::Point3;
 use nalgebra::Unit;
 use nalgebra::Vector3;
-pub use primitives::{make_cube, make_ramp};
+pub use primitives::{make_block, make_cube, make_ramp};
 use std::collections::HashMap;
 
 pub const EPS_LENGTH_SYSTEM: f64 = 1e-12;
@@ -945,6 +945,7 @@ pub fn push_pull_face(mesh: &mut Mesh, fid: FaceId, offset: f64) -> Result<(), S
 mod tests {
     use super::*;
     use crate::primitives::make_cube;
+    use approx::assert_relative_eq;
     // Rotate the vector such that the minimum element is at [0].
     fn rotate<T: Ord>(mut v: Vec<T>) -> Vec<T> {
         if v.is_empty() {
@@ -980,5 +981,92 @@ mod tests {
                 EdgeId::new(8)
             ]
         );
+    }
+
+    fn assert_mesh_eq(actual: &Mesh, expected: &Mesh, eps: f64) {
+        validate_mesh(actual)
+            .unwrap_or_else(|errors| panic!("mesh validation errors:\n{}", errors.join("\n")));
+        assert_eq!(
+            actual.vertices.len(),
+            expected.vertices.len(),
+            "vertex count mismatch"
+        );
+        assert_eq!(
+            actual.edges.len(),
+            expected.edges.len(),
+            "edge count mismatch"
+        );
+        assert_eq!(
+            actual.oriented_edges.len(),
+            expected.oriented_edges.len(),
+            "oriented edge count mismatch"
+        );
+        assert_eq!(
+            actual.faces.len(),
+            expected.faces.len(),
+            "face count mismatch"
+        );
+        for (i, (a, e)) in actual
+            .vertices
+            .iter()
+            .zip(expected.vertices.iter())
+            .enumerate()
+        {
+            assert!(
+                (a.position - e.position).norm() <= eps,
+                "vertex {i}: {:?} != {:?}",
+                a.position,
+                e.position
+            );
+        }
+        for (i, (a, e)) in actual.edges.iter().zip(expected.edges.iter()).enumerate() {
+            assert_eq!(a.vertices, e.vertices, "edge {i}: vertices mismatch");
+            assert_eq!(
+                a.oriented_edges, e.oriented_edges,
+                "edge {i}: oriented_edges mismatch"
+            );
+        }
+        for (i, (a, e)) in actual
+            .oriented_edges
+            .iter()
+            .zip(expected.oriented_edges.iter())
+            .enumerate()
+        {
+            assert_eq!(a.edge, e.edge, "oriented_edge {i}: edge mismatch");
+            assert_eq!(a.forward, e.forward, "oriented_edge {i}: forward mismatch");
+            assert_eq!(a.face, e.face, "oriented_edge {i}: face mismatch");
+        }
+        for (i, (a, e)) in actual.faces.iter().zip(expected.faces.iter()).enumerate() {
+            assert_eq!(
+                a.oriented_edges, e.oriented_edges,
+                "face {i}: oriented_edges mismatch"
+            );
+        }
+    }
+
+    #[test]
+    fn push_pull_block() {
+        let mut b3 = make_block(3.0, 1.0, 1.0);
+        // Make sure right_fid faces +X.
+        let right_fid = FaceId::new(5);
+        let n = b3.face_normal(right_fid).unwrap();
+        assert_relative_eq!(
+            n.into_inner(),
+            Vector3::new(1.0, 0.0, 0.0),
+            epsilon = EPS_LENGTH_SYSTEM
+        );
+        let mut b3_actual = b3.clone();
+        push_pull_face(&mut b3_actual, right_fid, 0.0).unwrap();
+        assert_mesh_eq(&b3_actual, &b3, EPS_LENGTH_SYSTEM);
+
+        let b4 = make_block(4.0, 1.0, 1.0);
+        let mut b4_actual = b3.clone();
+        push_pull_face(&mut b4_actual, right_fid, 1.0).unwrap();
+        assert_mesh_eq(&b4_actual, &b4, EPS_LENGTH_SYSTEM);
+
+        let b2 = make_block(2.0, 1.0, 1.0);
+        let mut b2_actual = b3.clone();
+        push_pull_face(&mut b2_actual, right_fid, -1.0).unwrap();
+        assert_mesh_eq(&b2_actual, &b2, EPS_LENGTH_SYSTEM);
     }
 }

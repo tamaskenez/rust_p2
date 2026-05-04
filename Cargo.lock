@@ -291,6 +291,7 @@ dependencies = [
 name = "brep"
 version = "0.1.0"
 dependencies = [
+ "approx",
  "earcutr",
  "kiss3d",
  "nalgebra",

@@ -2,34 +2,34 @@ use nalgebra::{Point3, Unit, Vector3};
 
 use crate::{Edge, EdgeId, Face, FaceId, Mesh, OrientedEdge, OrientedEdgeId, Vertex, VertexId};
 
-/// Creates a unit cube with vertices at (0,0,0)–(1,1,1).
+/// Creates a rectangular block with one corner at the origin and dimensions sx × sy × sz.
 /// Face normals point outward; oriented edges wind counter-clockwise when
 /// viewed from outside.
-pub fn make_cube() -> Mesh {
+pub fn make_block(sx: f64, sy: f64, sz: f64) -> Mesh {
     let vertices = vec![
         Vertex {
             position: Point3::new(0.0, 0.0, 0.0),
         }, // 0
         Vertex {
-            position: Point3::new(1.0, 0.0, 0.0),
+            position: Point3::new(sx, 0.0, 0.0),
         }, // 1
         Vertex {
-            position: Point3::new(1.0, 1.0, 0.0),
+            position: Point3::new(sx, sy, 0.0),
         }, // 2
         Vertex {
-            position: Point3::new(0.0, 1.0, 0.0),
+            position: Point3::new(0.0, sy, 0.0),
         }, // 3
         Vertex {
-            position: Point3::new(0.0, 0.0, 1.0),
+            position: Point3::new(0.0, 0.0, sz),
         }, // 4
         Vertex {
-            position: Point3::new(1.0, 0.0, 1.0),
+            position: Point3::new(sx, 0.0, sz),
         }, // 5
         Vertex {
-            position: Point3::new(1.0, 1.0, 1.0),
+            position: Point3::new(sx, sy, sz),
         }, // 6
         Vertex {
-            position: Point3::new(0.0, 1.0, 1.0),
+            position: Point3::new(0.0, sy, sz),
         }, // 7
     ];
 
@@ -130,6 +130,11 @@ pub fn make_cube() -> Mesh {
         oriented_edges,
         faces,
     }
+}
+
+/// Creates a unit cube; equivalent to `make_block(1.0, 1.0, 1.0)`.
+pub fn make_cube() -> Mesh {
+    make_block(1.0, 1.0, 1.0)
 }
 
 /// Creates a ramp: the 2D profile (x,y) CCW — (0,0),(2,0),(1,0.5),(1,1),(0,1) —
