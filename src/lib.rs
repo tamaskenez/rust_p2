@@ -1069,4 +1069,51 @@ mod tests {
         push_pull_face(&mut b2_actual, right_fid, -1.0).unwrap();
         assert_mesh_eq(&b2_actual, &b2, EPS_LENGTH_SYSTEM);
     }
+
+    #[test]
+    fn pull_non_perpendicular() {
+        let mut mesh = make_ramp();
+        let fid_pulled = FaceId::new(4);
+        let mut mesh_pulled = mesh.clone();
+        let pull_offset = 1.0;
+        push_pull_face(&mut mesh_pulled, fid_pulled, pull_offset).unwrap();
+        validate_mesh(&mesh_pulled)
+            .unwrap_or_else(|errors| panic!("mesh validation errors:\n{}", errors.join("\n")));
+        let num_mesh_faces = mesh.faces.len();
+        assert_eq!(mesh_pulled.faces.len(), num_mesh_faces + 1);
+        // Check normals and vertex count.
+        for i in 0..num_mesh_faces {
+            let fid = FaceId::new(i);
+            let n = mesh.face_normal(fid).unwrap();
+            let n_pulled = compute_face_normal(&mesh_pulled, fid).unwrap();
+            assert_relative_eq!(
+                n_pulled.into_inner(),
+                n.into_inner(),
+                epsilon = EPS_LENGTH_SYSTEM
+            );
+        }
+        // Check the new, skirt face.
+        let fid_new_skirt = FaceId::new(num_mesh_faces);
+        assert_eq!(mesh_pulled.faces[fid_new_skirt].oriented_edges.len(), 4);
+        let n_pulled_skirt = compute_face_normal(&mesh_pulled, fid_new_skirt).unwrap();
+        assert_relative_eq!(
+            n_pulled_skirt.into_inner(),
+            Vector3::new(0.0, -1.0, 0.0),
+            epsilon = EPS_LENGTH_SYSTEM
+        );
+        // Make sure the pulled face pulled the right amount.
+        let pulled_face_orig_verts = mesh.vertices_of_face(fid_pulled);
+        let pulled_face_pulled_verts = mesh_pulled.vertices_of_face(fid_pulled);
+        let num_verts = pulled_face_orig_verts.len();
+        assert_eq!(num_verts, pulled_face_pulled_verts.len());
+        for i in 0..num_verts {
+            let v_orig = mesh.vertices[pulled_face_orig_verts[i]].position;
+            let v_pulled = mesh_pulled.vertices[pulled_face_pulled_verts[i]].position;
+            assert_relative_eq!(
+                v_pulled,
+                v_orig + Vector3::new(pull_offset, 0.0, 0.0),
+                epsilon = EPS_LENGTH_SYSTEM
+            );
+        }
+    }
 }
